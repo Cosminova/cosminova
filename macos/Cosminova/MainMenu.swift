@@ -43,7 +43,7 @@ enum MainMenu {
         bar.addItem(appMenu())
         bar.addItem(interfaceMenu(target: target))
         bar.addItem(viewMenu(target: target))
-        bar.addItem(windowMenu())
+        bar.addItem(windowMenu(target: target))
         bar.addItem(helpMenu(target: target))
         NSApp.mainMenu = bar
     }
@@ -127,7 +127,7 @@ enum MainMenu {
         return item
     }
 
-    private static func windowMenu() -> NSMenuItem {
+    private static func windowMenu(target: AppDelegate) -> NSMenuItem {
         let item = NSMenuItem()
         let menu = NSMenu(title: "Window")
 
@@ -135,6 +135,19 @@ enum MainMenu {
         menu.addItem(withTitle: "Zoom", action: #selector(NSWindow.performZoom(_:)), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
+        menu.addItem(.separator())
+
+        /*
+         AppKit lists open windows here on its own, but drops a window once it
+         is closed — and closing does not quit — so without this there is no
+         way back from the menu bar. The window is excluded from that automatic
+         list so it does not appear twice.
+         */
+        let main = menu.addItem(withTitle: "Cosminova", action: #selector(AppDelegate.showMainWindow(_:)), keyEquivalent: "0")
+        main.target = target
+
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Bring All to Front", action: #selector(NSApplication.arrangeInFront(_:)), keyEquivalent: "")
 
         item.submenu = menu
         NSApp.windowsMenu = menu
@@ -164,6 +177,9 @@ enum MainMenu {
             keyEquivalent: ""
         )
         keys.target = target
+
+        let support = menu.addItem(withTitle: "Cosminova Support", action: #selector(AppDelegate.openSupport(_:)), keyEquivalent: "")
+        support.target = target
 
         item.submenu = menu
         NSApp.helpMenu = menu

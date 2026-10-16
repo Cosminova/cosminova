@@ -78,7 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows: Bool) -> Bool {
-        if !hasVisibleWindows { window?.makeKeyAndOrderFront(nil) }
+        if !hasVisibleWindows { showMainWindow(nil) }
         return true
     }
 
@@ -141,6 +141,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isReleasedWhenClosed = false
+        // Window → Cosminova stands in for it; see `MainMenu.windowMenu`.
+        window.isExcludedFromWindowsMenu = true
         window.contentView = webView
         window.center()
         window.setFrameAutosaveName("CosminovaMain")
@@ -154,10 +156,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - menu actions
 
-    @objc func showExplorer(_ sender: Any?) { load(.explorer) }
-    @objc func showSky(_ sender: Any?) { load(.sky) }
-    @objc func reloadScene(_ sender: Any?) { webView.reload() }
+    static let supportURL = URL(string: "https://cosminova.github.io/info/support/")!
+
+    /// Brings back the one window, including after it has been closed.
+    @objc func showMainWindow(_ sender: Any?) {
+        if window.isMiniaturized { window.deminiaturize(nil) }
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // These act on the window's contents, so they bring it back rather than
+    // changing a scene nobody can see.
+    @objc func showExplorer(_ sender: Any?) { load(.explorer); showMainWindow(nil) }
+    @objc func showSky(_ sender: Any?) { load(.sky); showMainWindow(nil) }
+    @objc func reloadScene(_ sender: Any?) { webView.reload(); showMainWindow(nil) }
     @objc func explainFunctionKeys(_ sender: Any?) { FunctionKeys.presentNotice(unprompted: true) }
+    @objc func openSupport(_ sender: Any?) { NSWorkspace.shared.open(Self.supportURL) }
 
     /**
      Runs one of the web app's own shortcut actions, named by the menu item.
@@ -172,6 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
      */
     @objc func runShortcut(_ sender: NSMenuItem) {
         guard let id = sender.representedObject as? String else { return }
+        showMainWindow(nil)
         let escaped = id.replacingOccurrences(of: "'", with: "\\'")
         webView.evaluateJavaScript("window.cosminova?.ui?.shortcuts?.run('\(escaped)') ?? false") { result, error in
             if let error {
@@ -192,6 +207,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.informativeText = detail
         alert.runModal()
         NSApp.terminate(nil)
+    }
+}
+
+extension AppDelegate: NSMenuItemValidation {
+    /// The checkmark a Mac Window menu puts beside the window in front.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        if item.action == #selector(showMainWindow(_:)) {
+            item.state = window?.isKeyWindow == true ? .on : .off
+        }
+        return true
     }
 }
 
