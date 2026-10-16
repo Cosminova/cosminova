@@ -2082,8 +2082,18 @@ html.is-touch .flight-hint {
   .rail.is-open .rail-item .rail-label { opacity: 0; }
 }
 
+/* There is no right-hand column to give the right region at this width, so it is
+   laid over the middle row instead. Hiding it would leave Object, Planetary
+   system and Bookmarks lighting up in the rail and opening nothing. */
 @media (max-width: 680px) {
-  .region-right { display: none; }
+  .region-right {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: end;
+    justify-content: flex-end;
+    padding-bottom: var(--sp-2);
+  }
+  .region-right > .dock { max-height: 46vh; }
   .rail { width: var(--rail-w) !important; }
   .rail .rail-label { display: none; }
   .region-bottom { justify-content: center; }

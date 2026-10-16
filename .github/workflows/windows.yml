@@ -22,7 +22,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           cache: npm
 
       # npm ci rather than npm install so the build uses the resolved tree in
@@ -36,6 +36,24 @@ jobs:
 
       - name: Package the installer
         run: npx --no-install electron-builder --win --publish never
+
+      # Launches the packaged app and waits for the scene to report ready. The
+      # 1.0.0 installer shipped crashing at startup; this is what stops that
+      # reaching the release page again.
+      - name: Launch the packaged app
+        shell: pwsh
+        env:
+          COSMINOVA_SMOKE: '1'
+          ELECTRON_ENABLE_LOGGING: '1'
+        run: |
+          $p = Start-Process -FilePath 'release\win-unpacked\Cosminova.exe' -PassThru `
+            -RedirectStandardOutput smoke-out.txt -RedirectStandardError smoke-err.txt
+          $null = $p.Handle
+          $finished = $p.WaitForExit(180000)
+          Get-Content smoke-out.txt, smoke-err.txt -ErrorAction SilentlyContinue |
+            Select-String -Pattern 'smoke:|error' | Select-Object -Last 40
+          if (-not $finished) { $p.Kill(); throw 'the app did not finish its launch check within 3 minutes' }
+          if ($p.ExitCode -ne 0) { throw "the app failed its launch check (exit code $($p.ExitCode))" }
 
       # Kept regardless of how the run was triggered, so a manual run is still
       # useful for testing without cutting a release.

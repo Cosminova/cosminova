@@ -57,7 +57,7 @@ npm run dist:win    # builds a Windows installer into release/
 runner and attaches the result to a release when a `v*` tag is pushed. The
 installer is not code-signed, so SmartScreen warns once on first run.
 
-`desktop/main.js` is the whole of the shell: one window, a menu that switches
+`desktop/main.cjs` is the whole of the shell: one window, a menu that switches
 between the two views, and a preload bridge exposing nothing but the platform
 name.
 

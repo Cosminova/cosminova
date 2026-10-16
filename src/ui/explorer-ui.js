@@ -209,6 +209,7 @@ export function createExplorerUI(config) {
    * away and the view is what you came back for.
    */
   const startClosed = platform.deviceClass === 'phone';
+  const narrow = window.matchMedia('(max-width: 680px)');
 
   function registerPanel(id, made, region) {
     panels.set(id, made);
@@ -221,6 +222,16 @@ export function createExplorerUI(config) {
     const made = panels.get(id);
     if (!made) return;
     const next = force === undefined ? made.root.hidden : force;
+    // Below 680 points the left and right docks overlap, so a second panel
+    // would land on top of the first.
+    if (next && narrow.matches) {
+      for (const [other, o] of panels) {
+        if (other !== id && !o.root.hidden) {
+          show(o.root, false);
+          prefs.set(`panels.${other}`, false);
+        }
+      }
+    }
     show(made.root, next);
     prefs.set(`panels.${id}`, next);
     if (next) made.root.classList.add('is-entering');

@@ -1,8 +1,8 @@
 {
   "name": "cosminova",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Real-time night sky renderer: real star catalogue, deep sky objects and ephemerides, from naked eye down to telescope fields.",
-  "main": "desktop/main.js",
+  "main": "desktop/main.cjs",
   "scripts": {
     "desktop": "npm run build && electron .",
     "dist:win": "npm run build && electron-builder --win --publish never",

@@ -21,6 +21,23 @@ const path = require('node:path');
 app.commandLine.appendSwitch('force_high_performance_gpu');
 app.commandLine.appendSwitch('enable-zero-copy');
 
+// Set by the Windows build to launch the packaged app once, wait for the scene
+// to come up, and exit 0 — or exit 1 on any failure. The 1.0.0 installer
+// shipped crashing before it drew a window, and nothing launched it to notice.
+const SMOKE = Boolean(process.env.COSMINOVA_SMOKE);
+const SMOKE_TIMEOUT_MS = 120000;
+// Build machines have no GPU, and Chromium only falls back to its software
+// renderer for WebGL when told it may.
+if (SMOKE) {
+  app.commandLine.appendSwitch('enable-unsafe-swiftshader');
+  // Otherwise an exception raises a modal error box, which on a build machine
+  // just waits forever for someone to click it.
+  process.on('uncaughtException', (error) => {
+    console.error(`smoke: FAIL ${error.stack ?? error}`);
+    app.exit(1);
+  });
+}
+
 const APP_ROOT = path.join(__dirname, '..');
 
 /** The two entry points the app is built with, as file paths. */
@@ -48,7 +65,7 @@ function createWindow() {
     show: false,
     title: 'Cosminova',
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.join(__dirname, 'preload.cjs'),
       // The renderer is our own build and is handed no Node access; anything it
       // needs from the shell arrives through the preload bridge instead.
       contextIsolation: true,
@@ -72,6 +89,37 @@ function createWindow() {
   });
 
   window_.loadFile(VIEWS.explorer);
+  if (SMOKE) watchSmoke(window_.webContents);
+}
+
+/** Exits 0 once the scene reports itself ready, 1 on any failure on the way. */
+function watchSmoke(contents) {
+  const fail = (reason) => {
+    console.error(`smoke: FAIL ${reason}`);
+    app.exit(1);
+  };
+  contents.on('did-fail-load', (_event, code, description) => fail(`load ${code} ${description}`));
+  contents.on('render-process-gone', (_event, details) => fail(`renderer ${details.reason}`));
+  contents.on('console-message', (_event, level, message) => {
+    if (level >= 3) fail(`console: ${message}`);
+  });
+  const started = Date.now();
+  const poll = setInterval(async () => {
+    let ready = false;
+    try {
+      ready = await contents.executeJavaScript('window.cosminova?.ready === true');
+    } catch {
+      // The page is between navigations; asked again on the next tick.
+    }
+    if (ready) {
+      clearInterval(poll);
+      console.log(`smoke: ok, scene ready after ${Date.now() - started} ms`);
+      app.exit(0);
+    } else if (Date.now() - started > SMOKE_TIMEOUT_MS) {
+      clearInterval(poll);
+      fail(`scene not ready after ${SMOKE_TIMEOUT_MS} ms`);
+    }
+  }, 500);
 }
 
 /**
