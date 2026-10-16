@@ -33,6 +33,11 @@ const DEVICES = {
     pixels: [1284, 2778],
     ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
   },
+  'iphone-6.3': {
+    viewport: { width: 402, height: 874, deviceScaleFactor: 3, isMobile: true, hasTouch: true },
+    pixels: [1206, 2622],
+    ua: 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1',
+  },
   'ipad-13': {
     viewport: { width: 1032, height: 1376, deviceScaleFactor: 2, isMobile: true, hasTouch: true },
     pixels: [2064, 2752],

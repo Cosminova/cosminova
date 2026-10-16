@@ -12,6 +12,7 @@ import {
   Mesh,
   MeshBasicMaterial,
   PerspectiveCamera,
+  Quaternion,
   Scene,
   SphereGeometry,
   HalfFloatType,
@@ -60,7 +61,11 @@ import { CRAFT_KINDS, DATA_TIERS } from './engine/craft-missions.js';
 import {
   AU_KM, EARTH_RADIUS_KM, formatDistance, PC_KM, SOLAR_RADIUS_KM, equatorialToEcliptic,
 } from './engine/units.js';
-import { equatorialToVector } from './astro.js';
+import { equatorialToVector, vectorToEquatorial } from './astro.js';
+import { Cosmos } from './engine/cosmos.js';
+import { GaiaField, loadGaiaCatalog } from './engine/gaia-field.js';
+import { Ship } from './engine/ship.js';
+import { inventForCatalogStar, inventStarSystem } from './engine/procgen.js';
 import { createExplorerUI } from './ui/explorer-ui.js';
 import { createHome } from './ui/home.js';
 import { basePixelRatio, capTextureWidth, platform } from './engine/platform.js';
@@ -152,6 +157,8 @@ const skyScene = new Scene();
 const skyCamera = new PerspectiveCamera(52, 1, 0.05, 4000);
 
 const controls = new OrbitApproachControls(camera, canvas);
+const ship = new Ship({ touch: platform.touch });
+scene.add(ship.group);
 
 const universe = new Universe();
 const sun = new Star({ radiusKm: SUN.radiusKm });
@@ -213,6 +220,14 @@ const deepField = new DeepField({
   maxPointSize: platform.maxPointSize,
 });
 for (const object of deepField.objects) scene.add(object);
+
+// Past the catalogues: stars generated inside every galaxy, galaxies generated
+// past the edge of the survey, both in cells that load around the camera and
+// unload behind it. See engine/cosmos.js.
+const cosmos = new Cosmos({ deepField, colorLookup });
+for (const object of cosmos.objects) scene.add(object);
+// The Gaia stars arrive after the first frames; see the end of this file.
+let gaia = null;
 
 const milkyWay = createMilkyWay({
   texture: data.milkyWayTexture,
@@ -757,6 +772,10 @@ function resolveWorld(key) {
   }
   const dest = destByKey.get(key);
   if (!dest) return null;
+  if (dest.kind === 'galaxy' && dest.cosmic) {
+    const g = dest.cosmic;
+    return { key, name: dest.name, position: g.center.clone(), radius: g.radiusKm, kind: 'galaxy', normal: g.n };
+  }
   if (dest.kind === 'galaxy') {
     const g = deepField.galaxyAt(dest.galaxyIndex);
     return {
@@ -786,6 +805,11 @@ function resolveWorld(key) {
   }
   if (dest.kind === 'black-hole') {
     const hole = blackHoles.get(dest.key);
+    // A generated hole is only built while you are near it; from further off
+    // it is still somewhere to go.
+    if (!hole) {
+      return { key, name: dest.name, position: dest.spec.world.clone(), radius: 2.95 * dest.spec.massSol, kind: 'black-hole', spec: dest.spec };
+    }
     return {
       key,
       name: dest.name,
@@ -1057,21 +1081,27 @@ function selectTarget(key, { fly = false, duration = 3200 } = {}) {
   }
 }
 
+function unloadExo() {
+  if (!exoSystem) return;
+  // The craft go with the system: there are thousands of systems, and holding
+  // every fleet ever visited would grow the roster without bound.
+  craftField.drop(exoCraftKeys);
+  craft.forget(exoCraftKeys);
+  for (const craftKey of exoCraftKeys) removeDestination(craftDestKey(craftKey));
+  exoCraftKeys = [];
+  exoSystem.dispose();
+  exoSystem = null;
+  // Whichever point stood in for the host star is the star again.
+  cosmos.hideStar(null);
+  gaia?.hide(-1);
+}
+
 function maybeLoadExo(key) {
   const dest = destByKey.get(key);
   const system = dest?.system;
   if (!system) return;
   if (exoSystem?.system.host === system.host) return;
-  if (exoSystem) {
-    // The craft go with the system: there are thousands of systems, and holding
-    // every fleet ever visited would grow the roster without bound.
-    craftField.drop(exoCraftKeys);
-    craft.forget(exoCraftKeys);
-    for (const craftKey of exoCraftKeys) removeDestination(craftDestKey(craftKey));
-    exoCraftKeys = [];
-    exoSystem.dispose();
-    exoSystem = null;
-  }
+  unloadExo();
   exoSystem = new ExoSystem(system);
   extras.add(exoSystem.star.group);
   for (const item of exoSystem.planets) extras.add(item.planet.group);
@@ -1376,10 +1406,17 @@ function setView(key, enabled) {
     case 'labelExo': state.labels.exo = enabled; break;
 
     case 'stars':
+      deepField.showStars = enabled;
       deepField.stars.visible = enabled;
       deepField.hostStars.points.visible = enabled;
+      cosmos.starPoints.visible = enabled;
+      if (gaia) gaia.points.visible = enabled;
       break;
-    case 'galaxies': deepField.galaxies.mesh.visible = enabled; break;
+    case 'galaxies':
+      deepField.galaxies.mesh.visible = enabled;
+      cosmos.galaxyMesh.visible = enabled;
+      cosmos.showClouds = enabled;
+      break;
     case 'milkyWay':
       milkyWay.mesh.visible = enabled;
       deepField.milkyWay.points.visible = enabled;
@@ -1486,6 +1523,10 @@ ui = createExplorerUI({
     bodyName,
     galaxyRecord(key) {
       const dest = destByKey.get(key);
+      if (dest?.cosmic) {
+        const g = dest.cosmic;
+        return { morph: `${galaxyType(g.morph)}, uncharted`, d: g.center.distanceTo(universe.get('sun').position) / (PC_KM * 1e6), radiusKm: g.radiusKm };
+      }
       if (dest?.galaxyIndex === undefined) return null;
       return { ...data.galaxies.galaxies[dest.galaxyIndex], radiusKm: deepField.galaxyAt(dest.galaxyIndex)?.radiusKm };
     },
@@ -1493,6 +1534,12 @@ ui = createExplorerUI({
       return position.distanceTo(universe.get('sun').position);
     },
     collectLabelItems: collectLabelItems,
+    liveDestinations: () => liveDests,
+    setShip,
+    shipActive: () => ship.active,
+    toggleShipView: () => ship.active && ship.toggleView(),
+    toggleWarp: () => ship.active && ship.toggleWarp(),
+    shipBrake: () => ship.active && ship.brake(),
   },
 });
 
@@ -1696,6 +1743,43 @@ function exoReferenceFlux(system, targetKey, hostLum, cameraWorld) {
  * motion to be the motion you share; past that the local star takes it, being
  * the nearest thing to still that this scene has.
  */
+let roamSurfaceKm = Infinity;
+const roamNearest = { key: null, position: null, radius: 0 };
+const tmpShipWorld = new Vector3();
+const tmpShipUp = new Vector3();
+const tmpBodyInverse = new Quaternion();
+
+/**
+ * Keeps the ship above the ground. The speed limit already slows it to a
+ * crawl near a surface, but a crawl held for long enough still goes through,
+ * so this is the floor: the measured terrain under the ship where the body
+ * has an elevation map, a little above the sphere where it does not.
+ */
+function keepShipAboveGround() {
+  if (!ship.active || !roamNearest.position) return;
+  const shipWorld = ship.worldPosition(controls, tmpShipWorld);
+  const up = tmpShipUp.copy(shipWorld).sub(roamNearest.position);
+  const distance = up.length();
+  if (!(distance > 0)) return;
+  up.multiplyScalar(1 / distance);
+  const body = universe.get(roamNearest.key);
+  let groundKm = null;
+  if (body?.orientation) {
+    const local = tmpShipWorld.copy(up).applyQuaternion(tmpBodyInverse.copy(body.orientation).invert());
+    groundKm = demGroundKm(roamNearest.key, local);
+  }
+  const floor = roamNearest.radius + (groundKm ?? roamNearest.radius * 0.002) + 0.03;
+  if (distance >= floor) return;
+  const push = floor - distance;
+  controls.roamOffset.addScaledVector(up, push);
+  controls.originOffset.addScaledVector(up, push);
+  controls.worldPosition.addScaledVector(up, push);
+  // Whatever was carrying the ship into the ground stops; sliding along it is fine.
+  const into = ship.velocity.dot(up);
+  if (into < 0) ship.velocity.addScaledVector(up, -into);
+  ship.speed = Math.min(ship.speed, ship.velocity.length());
+}
+
 function updateRoamFrame() {
   if (controls.mode !== 'roam') return;
   const starKey = exoSystem ? exoSystem.key : 'sun';
@@ -1734,10 +1818,294 @@ function updateRoamFrame() {
     }
   }
   controls.roamReferenceKm = clamp(bestSurface, 0.05, 1e12);
+  roamSurfaceKm = bestSurface;
+  roamNearest.key = bestKey;
+  roamNearest.position = bestPos;
+  roamNearest.radius = bestRadius;
   // Three hundred radii out a body is a couple of degrees wide and its orbital
   // motion is no longer yours to share.
   if (bestKey && bestSurface < bestRadius * 300) controls.setRoamAnchor(bestKey, bestPos);
   else controls.setRoamAnchor(starKey, starPos);
+}
+
+/*
+ * The neighbourhood: four times a second, what is near the camera (or the
+ * ship) and what that should switch on.
+ *
+ * A star you come within a few thousand au of becomes a system — the real one
+ * where the archive has planets for it, an invented one everywhere else — so
+ * every point of light in the sky is somewhere you can arrive. Generated
+ * galaxies and the black holes in them become destinations as they come into
+ * range, so search and the labels can name them. Only what is near is ever
+ * built, and the cost of this pass does not grow with how far you have come.
+ */
+const ACTIVATE_KM = 4000 * AU_KM;
+const liveDests = [];
+const liveStarKeys = new Map();
+const liveHoles = new Set();
+const catalogDests = new Map();
+for (const dest of destinations) {
+  if (dest.catalogIndex !== undefined) catalogDests.set(dest.catalogIndex, dest);
+}
+let realSystems = null;
+const tmpProbe = new Vector3();
+const tmpDesignation = new Vector3();
+const ECLIPTIC_TO_EQUATORIAL = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), ECLIPTIC_OBLIQUITY);
+let neighbourhoodAt = 0;
+const neighbourhood = { star: null, spaceKm: PC_KM };
+
+function addLive(entry) {
+  const existing = destByKey.get(entry.key);
+  if (existing) return existing;
+  addDestination(entry);
+  liveDests.push(entry);
+  return entry;
+}
+
+function registerLiveSystem(system, hostGroup) {
+  addLive({ key: `star:${system.host}`, name: system.host, kind: 'star', group: hostGroup, system, generated: true });
+  for (const planet of system.planets) {
+    addLive({
+      key: exoKey(planet.name), name: planet.name, kind: 'exo-planet', group: system.host, system, planetName: planet.name,
+    });
+  }
+}
+
+/** The IAU-style coordinate name a survey star goes by: "Gaia DR3 J053214.6+092251". */
+function designation(prefix, world) {
+  const { ra, dec } = vectorToEquatorial(tmpDesignation.copy(world).applyQuaternion(ECLIPTIC_TO_EQUATORIAL));
+  const pad = (n) => String(Math.floor(n)).padStart(2, '0');
+  const h = ra / 15;
+  const m = (h % 1) * 60;
+  const sec = (m % 1) * 60;
+  const ad = Math.abs(dec);
+  const dm = (ad % 1) * 60;
+  return `${prefix} J${pad(h)}${pad(m)}${sec.toFixed(1).padStart(4, '0')}${dec < 0 ? '-' : '+'}${pad(ad)}${pad(dm)}${pad((dm % 1) * 60)}`;
+}
+
+function nearestCatalogStar(world, maxKm) {
+  const w = deepField.world;
+  let best = -1;
+  let bestD2 = maxKm * maxKm;
+  for (let i = 0, n = deepField.count; i < n; i++) {
+    const dx = w[i * 3] - world.x;
+    const dy = w[i * 3 + 1] - world.y;
+    const dz = w[i * 3 + 2] - world.z;
+    const d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 < bestD2) {
+      bestD2 = d2;
+      best = i;
+    }
+  }
+  if (best < 0) return null;
+  return {
+    kind: 'hyg',
+    index: best,
+    absMag: deepField.absMag[best],
+    bv: data.catalog.colorIndex[best],
+    world: new Vector3(w[best * 3], w[best * 3 + 1], w[best * 3 + 2]),
+    distanceKm: Math.sqrt(bestD2),
+  };
+}
+
+function nearestRealSystem(world) {
+  if (!realSystems) {
+    realSystems = destinations
+      .filter((dest) => dest.kind === 'star' && dest.system && !dest.system.generated && dest.key !== 'sun')
+      .map((dest) => ({ dest, world: starWorld(dest) }));
+  }
+  let best = null;
+  let bestKm = Infinity;
+  for (const item of realSystems) {
+    const d = item.world.distanceTo(world);
+    if (d < bestKm) {
+      bestKm = d;
+      best = item;
+    }
+  }
+  if (!best || bestKm > 200 * PC_KM) return null;
+  return { kind: 'real', dest: best.dest, world: best.world, distanceKm: bestKm };
+}
+
+function starName(c) {
+  if (c.kind === 'real') return c.dest.name;
+  const key = liveStarKeys.get(starIdentity(c));
+  if (key) return destByKey.get(key)?.name ?? '';
+  if (c.kind === 'hyg') return catalogDests.get(c.index)?.name ?? designation('HYG', c.world);
+  if (c.kind === 'gaia') return designation('Gaia DR3', c.world);
+  return 'Uncharted star';
+}
+
+function starIdentity(c) {
+  return c.kind === 'gen' ? `g${c.seed}` : c.kind === 'hyg' ? `h${c.index}` : c.kind === 'gaia' ? `a${c.index}` : c.dest.key;
+}
+
+function activateStar(c) {
+  if (c.kind === 'real') {
+    maybeLoadExo(c.dest.key);
+    return;
+  }
+  const identity = starIdentity(c);
+  let key = liveStarKeys.get(identity);
+  if (!key) {
+    const named = c.kind === 'hyg' ? catalogDests.get(c.index) : null;
+    if (named) {
+      if (!named.system) {
+        named.system = inventForCatalogStar(named.key, { name: named.name, absMag: c.absMag, world: c.world, bv: c.bv });
+        named._profile = null;
+        for (const planet of named.system.planets) {
+          addLive({ key: exoKey(planet.name), name: planet.name, kind: 'exo-planet', group: named.name, system: named.system, planetName: planet.name });
+        }
+      }
+      key = named.key;
+    } else {
+      const system = c.kind === 'gen'
+        ? inventStarSystem(c.seed, { absMag: c.absMag, world: c.world, region: c.galaxy?.name })
+        : inventForCatalogStar(identity, { name: designation(c.kind === 'hyg' ? 'HYG' : 'Gaia DR3', c.world), absMag: c.absMag, world: c.world, bv: c.bv });
+      registerLiveSystem(system, c.kind === 'gen' ? (c.galaxy?.name ?? 'Uncharted stars') : 'Nearby stars');
+      key = `star:${system.host}`;
+    }
+    liveStarKeys.set(identity, key);
+  }
+  maybeLoadExo(key);
+  if (c.kind === 'gen') cosmos.hideStar(c.seed);
+  else if (c.kind === 'gaia') gaia?.hide(c.index);
+}
+
+/** Inverse of deep-field's morphCode. */
+function galaxyType(morph) {
+  return ['E', 'S0', 'Sb', 'Sc', 'SBb', 'SBc', 'Irr'][Math.round(Math.min(Math.max(morph, 0), 6))];
+}
+
+function disposeTree(object) {
+  object.traverse((node) => {
+    node.geometry?.dispose?.();
+    const materials = Array.isArray(node.material) ? node.material : node.material ? [node.material] : [];
+    for (const material of materials) material.dispose?.();
+  });
+}
+
+function updateHoles(probe) {
+  const wanted = new Map();
+  for (const g of cosmos.nearbyGalaxies(probe, 4)) {
+    if (g.center.distanceTo(probe) > g.radiusKm * 3) continue;
+    const spec = cosmos.holeSpecFor(g);
+    if (spec) wanted.set(`bh:${spec.key}`, spec);
+  }
+  for (const spec of cosmos.nearbyHoles(probe, 400)) wanted.set(`bh:${spec.key}`, spec);
+  for (const [key, spec] of wanted) {
+    if (blackHoles.has(key)) continue;
+    const hole = new BlackHole({ ...spec, ra: 0, dec: 0, distPc: 0 });
+    hole.world.copy(spec.world);
+    hole.group.visible = state.showBlackHoles;
+    blackHoles.set(key, hole);
+    extras.add(hole.group);
+    liveHoles.add(key);
+    addLive({ key, name: spec.name, kind: 'black-hole', group: 'Black holes', spec });
+  }
+  for (const key of liveHoles) {
+    if (wanted.has(key) || key === state.target) continue;
+    const hole = blackHoles.get(key);
+    extras.remove(hole.group);
+    disposeTree(hole.group);
+    blackHoles.delete(key);
+    liveHoles.delete(key);
+  }
+}
+
+function updateNeighbourhood(now) {
+  if (now - neighbourhoodAt < 250) return;
+  neighbourhoodAt = now;
+  const probe = ship.active ? ship.worldPosition(controls, tmpProbe) : tmpProbe.copy(controls.worldPosition);
+  const fromSun = probe.distanceTo(universe.get('sun').position);
+
+  let best = null;
+  const consider = (c, bias = 1) => {
+    if (c && (!best || c.distanceKm * bias < best.distanceKm)) best = c;
+  };
+  const generated = cosmos.nearestStar(probe, 200 * PC_KM);
+  if (generated) consider({ kind: 'gen', ...generated });
+  if (fromSun < 6000 * PC_KM) {
+    consider(nearestCatalogStar(probe, 200 * PC_KM));
+    const g = gaia?.nearest(probe, 30 * PC_KM);
+    if (g) consider({ kind: 'gaia', ...g });
+  }
+  // A real planetary system beats a survey star that is the same star.
+  consider(nearestRealSystem(probe), 0.5);
+  neighbourhood.star = best;
+
+  let galaxyKm = Infinity;
+  let galaxyName = '';
+  const nearGalaxy = (name, d, radiusKm) => {
+    const surface = Math.max(d - radiusKm, radiusKm * 0.05);
+    if (surface < galaxyKm) {
+      galaxyKm = surface;
+      galaxyName = name;
+    }
+  };
+  // Galaxies passed at warp would otherwise pile up in search and the labels.
+  if (liveDests.length > 400) {
+    for (let i = liveDests.length - 1; i >= 0; i--) {
+      const dest = liveDests[i];
+      if (!dest.cosmic || dest.key === state.target) continue;
+      if (dest.cosmic.center.distanceTo(probe) < 40 * PC_KM * 1e6) continue;
+      removeDestination(dest.key);
+      liveDests.splice(i, 1);
+    }
+  }
+  for (const g of cosmos.nearbyGalaxies(probe, 16)) {
+    nearGalaxy(g.name, g.center.distanceTo(probe), g.radiusKm);
+    addLive({ key: g.key, name: g.name, kind: 'galaxy', group: 'Uncharted galaxies', cosmic: g });
+  }
+  const inGalaxy = cosmos.active && cosmos.active.center.distanceTo(probe) < cosmos.active.radiusKm * 1.5;
+  for (let i = 0, n = data.galaxies.galaxies.length; i < n; i++) {
+    const g = deepField.galaxyAt(i);
+    const d = Math.hypot(g.x - probe.x, g.y - probe.y, g.z - probe.z);
+    const record = data.galaxies.galaxies[i];
+    nearGalaxy(record.name || record.id, d, g.radiusKm);
+  }
+  const starKm = best ? best.distanceKm : Infinity;
+  neighbourhood.spaceKm = Math.max(Math.min(inGalaxy || fromSun < 30000 * PC_KM ? Math.min(starKm, 3 * PC_KM) : Infinity, galaxyKm), 1e5);
+
+  if (ship.active) {
+    const sunKm = fromSun;
+    if (sunKm < 2000 * AU_KM) {
+      ship.nearestName = 'Sun';
+      ship.nearestKm = sunKm;
+    } else if (best && best.distanceKm < 50 * PC_KM) {
+      ship.nearestName = starName(best);
+      ship.nearestKm = best.distanceKm;
+    } else if (galaxyName) {
+      ship.nearestName = galaxyName;
+      ship.nearestKm = galaxyKm;
+    } else {
+      ship.nearestName = '';
+    }
+  }
+
+  if (best && best.distanceKm < ACTIVATE_KM) activateStar(best);
+  else if (exoSystem && destByKey.get(state.target)?.system !== exoSystem.system) {
+    // A system nobody is near or looking at is unloaded, the same as a star
+    // cell; arriving again rebuilds it from its seed.
+    const host = resolveWorld(`star:${exoSystem.system.host}`);
+    if (!host || host.position.distanceTo(probe) > PC_KM) unloadExo();
+  }
+  updateHoles(probe);
+}
+
+function setShip(enabled) {
+  if (enabled === ship.active) return;
+  if (enabled) {
+    if (state.viewFromEarth) setViewFromEarth(false);
+    if (state.riding) setRiding(null);
+    controls.trackTarget = false;
+    controls.startRoam();
+    ship.enter(controls);
+    controls.pilot = ship;
+  } else {
+    controls.pilot = null;
+    ship.exit();
+  }
 }
 
 /** The camera in a body's own frame, exactly where the camera is anchored to it. */
@@ -2035,8 +2403,18 @@ function frame(now) {
       : null,
   );
 
+  keepShipAboveGround();
   const cam = controls.worldPosition;
   updateCameraFrame();
+  // Anything that took the camera out of roam — a flight, a mode button — has
+  // also taken it off the ship.
+  if (ship.active && controls.mode !== 'roam') {
+    setShip(false);
+    ui?.syncCamera?.();
+  }
+  updateNeighbourhood(now);
+  ship.surfaceKm = roamSurfaceKm;
+  ship.spaceKm = neighbourhood.spaceKm;
   const range = state.viewFromEarth
     ? 0.02
     : Math.max(controls.altitudeKm, targetRadius * 0.001, 0.0005);
@@ -2045,7 +2423,9 @@ function frame(now) {
   // distance to a planet that may be an astronomical unit off.
   camera.near = rider
     ? Math.max(riderSizeKm * 0.01, 2e-7)
-    : clamp(range * 0.02, 0.0004, 1e8);
+    : ship.active
+      ? ship.view === 'cockpit' ? 3e-5 : 1.5e-3
+      : clamp(range * 0.02, 0.0004, 1e8);
   camera.far = 1e22;
   camera.updateProjectionMatrix();
 
@@ -2434,6 +2814,37 @@ function frame(now) {
       / (2 * Math.tan((camera.fov * Math.PI) / 360)),
   });
 
+  cosmos.update({
+    cameraWorld: cam,
+    pixelRatio: renderer.getPixelRatio(),
+    sunDistanceKm: fromSun,
+    cameraDistanceToSunKm: fromSun,
+  });
+  if (gaia) {
+    gaia.points.visible = deepField.showStars && fromSun < 8000 * PC_KM;
+    // Brightest first, so a frame under strain sheds the faint tail, which is
+    // most of the vertices and very little of the picture.
+    gaia.points.geometry.setDrawRange(0, Math.round(gaia.count * clamp(quality.level ** 1.5, 0.3, 1)));
+    gaia.update(cam);
+  }
+  if (ship.active) {
+    const sunPos = universe.get('sun').position;
+    const useExo = exoSystem && cam.distanceTo(exoSystem.position) < cam.distanceTo(sunPos);
+    const lightPos = useExo ? exoSystem.position : sunPos;
+    const lightKm = Math.max(cam.distanceTo(lightPos), 1);
+    const lum = useExo ? exoSystem.luminositySol ?? 1 : 1;
+    if (useExo) shipLightColour.setRGB(...colorIndexToLinearRgb(teffToBv(exoSystem.system.teff ?? SOLAR_TEFF), 1));
+    else shipLightColour.setRGB(1, 0.98, 0.95);
+    const peak = Math.max(shipLightColour.r, shipLightColour.g, shipLightColour.b, 1e-6);
+    shipLightColour.multiplyScalar(1 / peak);
+    ship.frame({
+      starRel: tmpShipLight.copy(lightPos).sub(cam),
+      starColour: shipLightColour,
+      starFlux: Math.min(lum * (AU_KM / lightKm) ** 2 * 4, 1),
+      time: now / 1000,
+    });
+  }
+
   ambient.updateScene(
     sceneWeights({
       viewFromEarth: state.viewFromEarth,
@@ -2464,6 +2875,9 @@ function frame(now) {
   if (window.cosminova) window.cosminova.ready = true;
 }
 
+const shipLightColour = new Color();
+const tmpShipLight = new Vector3();
+
 const _inverse = { x: 0, y: 0, z: 0, w: 1 };
 function tmpQuaternionInverse(q) {
   _inverse.x = -q.x;
@@ -2475,6 +2889,14 @@ function tmpQuaternionInverse(q) {
 
 window.cosminova = {
   ready: false,
+  cosmos,
+  ship,
+  setShip,
+  neighbourhood,
+  liveDests,
+  get gaia() {
+    return gaia;
+  },
   state,
   controls,
   camera,
@@ -3000,3 +3422,21 @@ setTimeout(() => {
   home.whenStarted.then(() => ui.showIntroIfNew?.());
 }, 400);
 requestAnimationFrame(frame);
+
+// The million Gaia stars are nine megabytes and a few hundred milliseconds of
+// decoding, which the first view does not need: from Earth they are all past
+// the naked-eye limit. So they come in once the scene is up. A phone keeps the
+// brightest half; the file is sorted brightest first.
+setTimeout(async () => {
+  const catalog = await loadGaiaCatalog(`${(import.meta.env.BASE_URL ?? '/').replace(/\/$/, '')}/data`);
+  if (!catalog) return;
+  const t0 = performance.now();
+  gaia = new GaiaField(catalog, {
+    colorLookup,
+    starMaterial: deepField.starMaterial,
+    limit: platform.deviceClass === 'phone' ? 500000 : platform.deviceClass === 'tablet' ? 800000 : undefined,
+  });
+  gaia.points.visible = deepField.showStars;
+  scene.add(gaia.points);
+  window.cosminova.gaiaDecodeMs = performance.now() - t0;
+}, 2500);

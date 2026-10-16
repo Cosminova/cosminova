@@ -75,6 +75,13 @@ const CAMERA_MODES = [
       : 'Let go of the body entirely and fly through open space. '
         + 'Drag turns you on the spot, the wheel sets your speed.',
   },
+  {
+    value: 'ship',
+    label: 'Ship',
+    title: TOUCH
+      ? 'Take a ship. W and S set the throttle, A and D turn, Q and E roll; drag to steer, pinch for throttle.'
+      : 'Take a ship (P). W/S throttle, A/D and the arrows steer, Q/E roll, Shift boosts, J engages warp, V switches to the cockpit.',
+  },
 ];
 
 /**
@@ -169,6 +176,7 @@ export function createExplorerUI(config) {
 
   const search = createSearch({
     destinations,
+    liveDestinations: () => hooks.liveDestinations?.() ?? [],
     resolve: (key) => {
       const resolved = resolveWorld(key);
       if (!resolved) return null;
@@ -863,9 +871,10 @@ export function createExplorerUI(config) {
   }
 
   function setCameraMode(mode) {
+    if (mode !== 'ship') hooks.setShip?.(false);
     // Leaving roam has to hand the target back before anything else reads the
     // distance, since roaming leaves the camera somewhere no bearing describes.
-    if (mode !== 'roam') controls.stopRoam();
+    if (mode !== 'roam' && mode !== 'ship') controls.stopRoam();
     if (mode === 'orbit') {
       controls.mode = 'orbit';
       controls.trackTarget = false;
@@ -878,15 +887,18 @@ export function createExplorerUI(config) {
     } else if (mode === 'roam') {
       controls.trackTarget = false;
       controls.startRoam();
+    } else if (mode === 'ship') {
+      hooks.setShip?.(true);
     }
     modeControl.set(mode);
     // Orbit has nothing for thrust to do, so the pad only exists in the modes
     // where pressing a key moves you.
     flight.setVisible(mode !== 'orbit');
-    flight.setRoaming(mode === 'roam');
+    flight.setRoaming(mode === 'roam' || mode === 'ship');
   }
 
   function currentMode() {
+    if (controls.pilot && controls.mode === 'roam') return 'ship';
     if (controls.mode === 'roam') return 'roam';
     if (state.viewFromEarth) return 'orbit';
     if (controls.mode === 'fly') return controls.trackTarget ? 'track' : 'free';
@@ -1113,6 +1125,10 @@ export function createExplorerUI(config) {
   shortcuts.register({ id: 'nav.orbit', key: 'O', label: 'Orbit the selection', group: 'Navigation', run: () => runAction('orbit') });
   shortcuts.register({ id: 'nav.track', key: 'T', label: 'Track the selection', group: 'Navigation', run: () => setCameraMode(currentMode() === 'track' ? 'free' : 'track') });
   shortcuts.register({ id: 'nav.roam', key: 'R', label: 'Roam free of any target', group: 'Navigation', run: () => setCameraMode(currentMode() === 'roam' ? 'orbit' : 'roam') });
+  shortcuts.register({ id: 'ship.toggle', key: 'P', label: 'Take or leave the ship', group: 'Ship', run: () => setCameraMode(currentMode() === 'ship' ? 'orbit' : 'ship') });
+  shortcuts.register({ id: 'ship.view', key: 'V', label: 'Chase or cockpit view', group: 'Ship', when: () => hooks.shipActive?.(), run: () => hooks.toggleShipView?.() });
+  shortcuts.register({ id: 'ship.brake', key: 'X', label: 'Full stop', group: 'Ship', when: () => hooks.shipActive?.(), run: () => hooks.shipBrake?.() });
+  shortcuts.register({ id: 'ship.warp', key: 'J', label: 'Engage or drop warp', group: 'Ship', when: () => hooks.shipActive?.(), run: () => hooks.toggleWarp?.() });
   shortcuts.register({ id: 'nav.land', key: 'L', label: 'Descend to the surface', group: 'Navigation', run: () => runAction('land') });
   shortcuts.register({ id: 'nav.bookmark', key: 'B', label: 'Bookmark the selection', group: 'Navigation', run: () => runAction('bookmark') });
 
@@ -1334,6 +1350,7 @@ export function createExplorerUI(config) {
       !state.viewFromEarth && (controls.mode === 'fly' || controls.mode === 'roam'),
     );
     flight.setRoaming(controls.mode === 'roam');
+    flight.setShip(Boolean(controls.pilot) && controls.mode === 'roam');
     flight.sync();
     if (!quality.panel.root.hidden) quality.update(hooks.qualityStats?.());
 

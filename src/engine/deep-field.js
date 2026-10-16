@@ -26,7 +26,7 @@ const MAG_TO_LOG2_FLUX = 1.3287712;
 const GALAXY_MIN_PX = 2;
 const GALAXY_FULL_PX = 6;
 
-const STAR_VERTEX = /* glsl */ `
+export const STAR_VERTEX = /* glsl */ `
   #include <common>
   #include <logdepthbuf_pars_vertex>
   attribute float absMag;
@@ -71,7 +71,7 @@ const STAR_VERTEX = /* glsl */ `
   }
 `;
 
-const STAR_FRAGMENT = /* glsl */ `
+export const STAR_FRAGMENT = /* glsl */ `
   #include <common>
   #include <logdepthbuf_pars_fragment>
   uniform float coreSigma;
@@ -103,7 +103,7 @@ const STAR_FRAGMENT = /* glsl */ `
   }
 `;
 
-const GALAXY_VERTEX = /* glsl */ `
+export const GALAXY_VERTEX = /* glsl */ `
   #include <common>
   #include <logdepthbuf_pars_vertex>
   attribute vec3 iOffset;
@@ -153,7 +153,7 @@ const GALAXY_VERTEX = /* glsl */ `
   }
 `;
 
-const GALAXY_FRAGMENT = /* glsl */ `
+export const GALAXY_FRAGMENT = /* glsl */ `
   #include <common>
   #include <logdepthbuf_pars_fragment>
   varying vec2 vUv;
@@ -339,7 +339,7 @@ function mulberry32(seed) {
   };
 }
 
-function morphColour(morph = '') {
+export function morphColour(morph = '') {
   const m = morph.toUpperCase();
   if (m.startsWith('E') || m.startsWith('S0')) return [1.0, 0.82, 0.58];
   if (m.includes('IRR') || m.startsWith('IB') || m.startsWith('I')) return [0.7, 0.78, 0.92];
@@ -347,7 +347,7 @@ function morphColour(morph = '') {
   return [0.82, 0.8, 0.78];
 }
 
-function morphCode(morph = '') {
+export function morphCode(morph = '') {
   const m = morph.toUpperCase();
   if (m.startsWith('E')) return 0;
   if (m.startsWith('S0') || m.startsWith('L')) return 1;
@@ -414,6 +414,7 @@ export class DeepField {
     this.world = new Float64Array(catalog.count * 3);
     this.relative = new Float32Array(catalog.count * 3);
     this.absMag = new Float32Array(catalog.count);
+    this.showStars = true;
 
     const pos = catalog.position;
     const dist = catalog.distanceParsec;
@@ -551,7 +552,10 @@ export class DeepField {
     geometry.setAttribute('iAxisV', new InstancedBufferAttribute(axisV, 3));
     geometry.setAttribute('iSize', new InstancedBufferAttribute(sizes, 2));
     geometry.setAttribute('iColor', new InstancedBufferAttribute(colors, 3));
-    geometry.setAttribute('iParams', new InstancedBufferAttribute(params, 3));
+    this.galaxyParamsAttr = new InstancedBufferAttribute(params, 3);
+    geometry.setAttribute('iParams', this.galaxyParamsAttr);
+    this.galaxyBaseLum = new Float32Array(count);
+    for (let i = 0; i < count; i++) this.galaxyBaseLum[i] = params[i * 3 + 2];
     geometry.instanceCount = count;
 
     const material = new ShaderMaterial({
@@ -759,25 +763,22 @@ export class DeepField {
     const cy = cameraWorld.y;
     const cz = cameraWorld.z;
 
+    // Far from home the catalogue is a few thousand parsecs of one galaxy's
+    // disc, seen from outside: too faint to draw a single star of, and the
+    // procedural universe is drawing the stars you are actually among.
     const farFromSun = sunDistanceKm > 8 * KPC_KM;
-    const rel = this.relative;
-    const world = this.world;
-    for (let i = 0, n = this.count; i < n; i++) {
-      const i3 = i * 3;
-      const wx = world[i3];
-      const wy = world[i3 + 1];
-      const wz = world[i3 + 2];
-      if (farFromSun) {
-        rel[i3] = wx;
-        rel[i3 + 1] = wy;
-        rel[i3 + 2] = wz;
-      } else {
-        rel[i3] = wx - cx;
-        rel[i3 + 1] = wy - cy;
-        rel[i3 + 2] = wz - cz;
+    this.stars.visible = this.showStars && !farFromSun;
+    if (this.stars.visible) {
+      const rel = this.relative;
+      const world = this.world;
+      for (let i = 0, n = this.count; i < n; i++) {
+        const i3 = i * 3;
+        rel[i3] = world[i3] - cx;
+        rel[i3 + 1] = world[i3 + 1] - cy;
+        rel[i3 + 2] = world[i3 + 2] - cz;
       }
+      this.relAttr.needsUpdate = true;
     }
-    this.relAttr.needsUpdate = true;
 
     const go = this.galaxies.offsets;
     const gw = this.galaxyWorld;
@@ -842,6 +843,25 @@ export class DeepField {
     } else {
       this.hostStars.points.visible = false;
     }
+  }
+
+  /**
+   * Scale one catalogue galaxy's painted disc, so the procedural universe can
+   * fade it out while its own stars take over from inside it.
+   */
+  setGalaxyDim(index, factor) {
+    const attr = this.galaxyParamsAttr;
+    if (!attr || index < 0 || index >= this.galaxies.count) return;
+    if (this._dimmed !== undefined && this._dimmed !== index) {
+      attr.array[this._dimmed * 3 + 2] = this.galaxyBaseLum[this._dimmed];
+      attr.needsUpdate = true;
+    }
+    const value = this.galaxyBaseLum[index] * factor;
+    if (attr.array[index * 3 + 2] !== value) {
+      attr.array[index * 3 + 2] = value;
+      attr.needsUpdate = true;
+    }
+    this._dimmed = index;
   }
 
   galaxyAt(index) {

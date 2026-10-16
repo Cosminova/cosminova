@@ -123,6 +123,8 @@ export class OrbitApproachControls {
      * possible: you slow down automatically as you close on it.
      */
     this.roamReferenceKm = 1e6;
+    /** A ship flying the roam camera, or null; see engine/ship.js. */
+    this.pilot = null;
     /**
      * Nearest body, for holding the camera's position as an exact offset from
      * something rather than as an absolute vector. Also supplied by the app.
@@ -326,7 +328,10 @@ export class OrbitApproachControls {
         return;
       }
       const scale = this.orbitSensitivity * clamp(Math.log10(Math.max(this.distanceRadii, 1.001)), 0.02, 2.4);
-      if (this.mode === 'roam') {
+      if (this.mode === 'roam' && this.pilot) {
+        this.pilot.steer(dx, dy);
+        this._lastDrag.set(0, 0);
+      } else if (this.mode === 'roam') {
         // Turning on the spot, and without a limit. The other modes steer with
         // the look offsets, which are clamped to a cone because they are an
         // offset from the line to the target — that would stop a roaming camera
@@ -420,7 +425,7 @@ export class OrbitApproachControls {
       const tag = event.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || event.target?.isContentEditable) return;
       this._keys.add(event.code);
-      if (event.code === 'KeyF') {
+      if (event.code === 'KeyF' && !this.pilot) {
         this.earthView = false;
         this.mode = this.mode === 'fly' ? 'orbit' : 'fly';
         if (this.mode === 'orbit') {
@@ -662,7 +667,10 @@ export class OrbitApproachControls {
     // that rolling the pair slightly — which two fingers on one hand do
     // constantly — does not turn the view.
     const lookScale = this.lookSensitivity;
-    if (this.mode === 'roam') {
+    if (this.mode === 'roam' && this.pilot) {
+      this.pilot.steer(dMidX, dMidY);
+      this._lastDrag.set(0, 0);
+    } else if (this.mode === 'roam') {
       // Roaming has no look offset to move: yaw and pitch are the view
       // direction itself, which is why a right-drag already does the same thing
       // as a left one there. Two fingers match that rather than inventing a
@@ -756,6 +764,12 @@ export class OrbitApproachControls {
    * stays one continuous motion: keep pulling back and eventually you leave.
    */
   zoomBy(amount) {
+    if (this.mode === 'roam' && this.pilot) {
+      // A notch is a notch of throttle; coasting on would keep opening it.
+      this.zoomVelocity = 0;
+      this.pilot.wheel(amount);
+      return;
+    }
     if (this.mode === 'roam') {
       // Nothing to zoom towards: the distance to the target is not what put the
       // camera here, so moving it would be a lie. The wheel changes how fast
@@ -916,6 +930,8 @@ export class OrbitApproachControls {
   }
 
   _applyKeys(dt) {
+    // Flying the ship, the keys are the ship's and it has already read them.
+    if (this.pilot && this.mode === 'roam') return;
     const keys = this._keys;
     const thrust =
       (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) +
@@ -1127,6 +1143,12 @@ export class OrbitApproachControls {
       // The view direction is `_offset` used as an aim rather than negated into
       // a line back to the target, so yaw and pitch mean where you are looking.
       forward = this._forward.copy(this._offset);
+      if (this.pilot) {
+        this.pilot.step(dt, this);
+        forward.copy(this.pilot.viewForward);
+        this.lookYaw = 0;
+        this.lookPitch = 0;
+      }
       // The anchor moves — it is a planet on its orbit — so the absolute
       // position is rebuilt from it each frame while the offset stays put. That
       // is also what makes the offset handed out below an exact one rather than
@@ -1163,7 +1185,8 @@ export class OrbitApproachControls {
     // movement. Exactly at the pole the cross product is still degenerate, so
     // the fallback below is the limit the two sides agree on rather than a
     // fixed axis, which is what keeps that single frame from jumping.
-    const orbiting = !this.riding && !this.earthView;
+    const piloting = Boolean(this.pilot) && this.mode === 'roam' && !flight;
+    const orbiting = !this.riding && !this.earthView && !piloting;
     if (orbiting) {
       // Take the horizon straight from the yaw instead of from a cross product.
       //
@@ -1189,7 +1212,7 @@ export class OrbitApproachControls {
       this._right.addScaledVector(forward, -this._right.dot(forward));
       if (this._right.lengthSq() < 1e-8) this._right.set(1, 0, 0);
     } else {
-      const worldUp = this.riding && rider ? this._riderUp : this.groundUp;
+      const worldUp = piloting ? this.pilot.viewUp : this.riding && rider ? this._riderUp : this.groundUp;
       this._right.crossVectors(worldUp, forward);
       if (this._right.lengthSq() < 1e-8) this._right.set(1, 0, 0);
     }

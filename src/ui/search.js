@@ -63,7 +63,7 @@ function score(entry, query, squashedQuery) {
   return 0;
 }
 
-export function createSearch({ destinations, resolve, craftStatus, onPick, onAction, prefs }) {
+export function createSearch({ destinations, liveDestinations, resolve, craftStatus, onPick, onAction, prefs }) {
   // Prepared once. `squashed` is only stored where it differs, to keep the index
   // from doubling in size for the tens of thousands of entries without spaces.
   const index = destinations.map((dest) => {
@@ -151,6 +151,15 @@ export function createSearch({ destinations, resolve, craftStatus, onPick, onAct
     const scored = [];
     const squashedQuery = squash(query);
     for (const entry of index) {
+      const value = score(entry, query, squashedQuery);
+      if (value > 0) scored.push({ entry, value });
+    }
+    // What the procedural universe has loaded around the camera right now. It
+    // comes and goes as you fly, so it is scored from scratch every time.
+    for (const dest of liveDestinations?.() ?? []) {
+      const lower = dest.name.toLowerCase();
+      const squashed = squash(lower);
+      const entry = { dest, lower, squashed: squashed === lower ? null : squashed };
       const value = score(entry, query, squashedQuery);
       if (value > 0) scored.push({ entry, value });
     }

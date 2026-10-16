@@ -1,0 +1,1 @@
+{"source":"ESA Gaia DR3 (gaiadr3.gaia_source)","query":"Gaia DR3 (CDS I/355/gaiadr3), Gmag < 11, Plx/e_Plx > 5","count":1165298,"magMin":6.500035366918179,"magMax":17.19413521464115,"encoding":{"LOG_MIN":-1,"LOG_MAX":5,"MAG_MIN":-2,"MAG_STEPS":20,"BV_MIN":-0.5,"BV_STEPS":80}}

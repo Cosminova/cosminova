@@ -57,10 +57,12 @@ const HINT = platform.touch
   ? {
     flying: 'Hold W/S to thrust \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 drag to steer',
     roaming: 'Hold W/S to thrust \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 pinch sets speed',
+    ship: 'W/S throttle \u00b7 A/D turn \u00b7 Q/E roll \u00b7 drag to steer \u00b7 pinch throttle',
   }
   : {
     flying: 'Thrust W/S \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 drag to steer',
     roaming: 'Thrust W/S \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 drag to turn \u00b7 wheel sets speed',
+    ship: 'Throttle W/S \u00b7 turn A/D, arrows \u00b7 roll Q/E \u00b7 drag to steer \u00b7 Shift boost \u00b7 J warp \u00b7 V view \u00b7 X stop',
   };
 
 export function createFlightControls({ controls, prefs }) {
@@ -186,6 +188,13 @@ export function createFlightControls({ controls, prefs }) {
 
   let visible = false;
   let roaming = false;
+  let piloting = false;
+  const speedRow = speed.parentElement;
+  const syncHint = () => {
+    hint.textContent = piloting ? HINT.ship : roaming ? HINT.roaming : HINT.flying;
+    // The ship has a throttle of its own; the roam speed scale means nothing to it.
+    speedRow.hidden = piloting;
+  };
 
   return {
     root,
@@ -226,7 +235,13 @@ export function createFlightControls({ controls, prefs }) {
     setRoaming(on) {
       if (on === roaming) return;
       roaming = on;
-      hint.textContent = on ? HINT.roaming : HINT.flying;
+      syncHint();
+    },
+
+    setShip(on) {
+      if (on === piloting) return;
+      piloting = on;
+      syncHint();
     },
 
     /** Reflects keyboard presses on the pad, so the two never look unrelated. */

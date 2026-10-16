@@ -92,10 +92,13 @@ async function frame(tag) {
   return { slabs, bright };
 }
 
+// Close to a galaxy the billboard hands over to a cloud of its stars, so
+// "the galaxy layer" is both.
 const setGalaxies = (on) => page.evaluate((v) => {
   window.cosminova.scene.traverse((o) => {
     if (o.geometry?.attributes?.iAxisU) o.visible = v;
   });
+  window.cosminova.cosmos.showClouds = v;
 }, on);
 
 let bad = 0;
