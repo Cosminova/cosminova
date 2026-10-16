@@ -89,7 +89,19 @@ async function frame(tag) {
     const fill = n / (w * h);
     const mean = px.reduce((a, b) => a + b, 0) / n;
     const sd = Math.sqrt(px.reduce((a, b) => a + (b - mean) ** 2, 0) / n);
-    if (n >= 18 && n <= 900 && fill >= 0.33 && fill <= 0.85 && sd <= 26) slabs++;
+    // Hard edged: a slab drops away within a pixel or two of its border. The
+    // peak of a soft glow sprite is just as flat inside the threshold, but
+    // the light round it is only a little dimmer.
+    let ring = 0;
+    let ringN = 0;
+    for (let x = Math.max(x0 - 2, 0); x <= Math.min(x1 + 2, width - 1); x++) {
+      for (const y of [y0 - 2, y1 + 2]) if (y >= 0 && y < height) { ring += data[y * width + x]; ringN++; }
+    }
+    for (let y = Math.max(y0 - 2, 0); y <= Math.min(y1 + 2, height - 1); y++) {
+      for (const x of [x0 - 2, x1 + 2]) if (x >= 0 && x < width) { ring += data[y * width + x]; ringN++; }
+    }
+    const hard = ringN === 0 || mean - ring / ringN > 45;
+    if (n >= 18 && n <= 900 && fill >= 0.33 && fill <= 0.85 && sd <= 26 && hard) slabs++;
   }
   return { slabs, bright, faint };
 }

@@ -202,6 +202,18 @@ export function pointGlare(brightness) {
   };
 }
 
+/**
+ * 0-1, how visible a point source of this luminosity is from this far away,
+ * by its apparent magnitude against the faintest the frame shows. The glare
+ * keeps a floor of brightness so a far Sun still reads as a star, and without
+ * this the floor held from anywhere: a bright point at the edge of the universe.
+ */
+export function pointVisibility(luminositySol, distanceKm, limitMagnitude = 8.7) {
+  const pc = Math.max(distanceKm / 3.0856775814913673e13, 1e-9);
+  const m = 4.83 - 2.5 * Math.log10(Math.max(luminositySol, 1e-12)) + 5 * Math.log10(pc) - 5;
+  return clamp((limitMagnitude - m) / 3, 0, 1);
+}
+
 export class Star {
   constructor({ radiusKm, colour = [1.0, 0.94, 0.86], intensity = 2.8, look = null }) {
     const surface = look ?? { granScale: 420, granContrast: 0.46, spots: 0.12, limb: [0.32, 0.23], seed: 0 };
@@ -262,7 +274,7 @@ export class Star {
    * @param brightness this star's light where the camera is, at the exposure
    *   the rest of the frame is being drawn at. 1 is full sunlight at Earth.
    */
-  update({ cameraLocal, time, distanceKm, pixelsPerRadian = 0, brightness = 1 }) {
+  update({ cameraLocal, time, distanceKm, pixelsPerRadian = 0, brightness = 1, visibility = 1 }) {
     this.material.uniforms.uCameraLocal.value.copy(cameraLocal);
     this.material.uniforms.uTime.value = time;
     // The corona is sized in world units, so it has to grow with distance to
@@ -292,6 +304,8 @@ export class Star {
     this.coronaMaterial.uniforms.uScale.value = scale;
     this.coronaMaterial.uniforms.uDiscFraction.value = clamp(this.radius / scale, 0.004, 0.9);
     this.coronaMaterial.uniforms.uIntensity.value =
-      this.baseCorona + (glare.intensity - this.baseCorona) * point;
+      (this.baseCorona + (glare.intensity - this.baseCorona) * point) * visibility;
+    this.mesh.visible = visibility > 0.002;
+    this.corona.visible = this.mesh.visible;
   }
 }

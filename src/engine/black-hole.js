@@ -13,7 +13,7 @@ import {
 import { AU_KM, equatorialToEcliptic, PC_KM } from './units.js';
 import { equatorialToVector } from '../astro.js';
 import { platform } from './platform.js';
-import { pointGlare } from './star.js';
+import { pointGlare, pointVisibility } from './star.js';
 
 /** Schwarzschild radius of one solar mass, km. */
 export const RS_KM_PER_SOL = 2.953;
@@ -434,7 +434,10 @@ export class BlackHole {
     const volumePixels = pixelsPerRadian ? (this.outerKm / distanceKm) * pixelsPerRadian * 2 : Infinity;
     // Handed over between four and fourteen pixels, so the point does not sit
     // on top of a disk that has become big enough to draw itself.
-    const point = 1 - clamp((volumePixels - 4) / 10, 0, 1);
+    // Under a pixel the volume is nothing but a smear the size of its own
+    // glow halo, which from another galaxy put a lamp where Sagittarius A* is.
+    this.mesh.visible = volumePixels > 0.5;
+    const point = (1 - clamp((volumePixels - 4) / 10, 0, 1)) * pointVisibility(this.luminositySol, distanceKm);
     this.glare.visible = point > 0.01;
     if (!this.glare.visible) return;
     const au = distanceKm / AU_KM;

@@ -122,6 +122,7 @@ export function makeModel(galaxy) {
   const radiusPc = galaxy.radiusKm / PC_KM;
   const f = Math.max(radiusPc / 15000, 0.02);
   const family = familyOf(galaxy.morph);
+  const magellanicBar = family === 'irregular' && galaxy.morph < 5.8;
   const seedPhase = (galaxy.seed % 10000) / 10000 * Math.PI * 2;
   const model = {
     family,
@@ -136,13 +137,18 @@ export function makeModel(galaxy) {
     arms: family === 'barred' ? 2 : 2 + ((galaxy.seed >>> 3) & 1) * 2,
     pitch: Math.tan((family === 'barred' ? 13 : 11 + (galaxy.seed % 7)) * Math.PI / 180),
     phase: seedPhase,
-    barLength: family === 'barred' ? 3200 * f : 0,
+    // The Magellanic barred ones carry a bar too, off-centre and fat, which
+    // is the brightest thing in the Large Cloud.
+    barLength: family === 'barred' ? 3200 * f : magellanicBar ? 4600 * f : 0,
+    barPeak: family === 'barred' ? 0.9 : 0,
+    barOffset: magellanicBar ? radiusPc * 0.12 : 0,
     ellipticalScale: radiusPc * 0.22,
     flattening: 0.55 + ((galaxy.seed >>> 7) % 40) / 100,
     seed: galaxy.seed,
   };
   // Small galaxies are thinner in surface density as well as smaller.
   model.discPeak *= Math.min(1, f ** 0.4);
+  if (magellanicBar) model.barPeak = model.discPeak * 5;
   return model;
 }
 
@@ -181,10 +187,12 @@ export function spheroid(m, x, y, z) {
     d += m.bulgePeak * Math.exp(-((r / m.bulgeScale) ** 0.9));
   }
   if (m.barLength) {
-    const bx = x * Math.cos(m.phase) + y * Math.sin(m.phase);
-    const by = -x * Math.sin(m.phase) + y * Math.cos(m.phase);
+    const ox = x - m.barOffset * Math.cos(m.phase + 1.9);
+    const oy = y - m.barOffset * Math.sin(m.phase + 1.9);
+    const bx = ox * Math.cos(m.phase) + oy * Math.sin(m.phase);
+    const by = -ox * Math.sin(m.phase) + oy * Math.cos(m.phase);
     const q = Math.hypot(bx / m.barLength, by / (m.barLength * 0.3), z / (m.barLength * 0.12));
-    d += 0.9 * Math.exp(-q * 3);
+    d += m.barPeak * Math.exp(-q * 3);
   }
   return d;
 }

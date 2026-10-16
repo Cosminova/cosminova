@@ -34,7 +34,7 @@ import { BODIES, BODY_BY_KEY, SUN } from './engine/bodies-data.js';
 import { MOONS, MOON_BY_KEY } from './engine/moons-data.js';
 import { Universe } from './engine/universe.js';
 import { Planet } from './engine/planet.js';
-import { Star } from './engine/star.js';
+import { Star, pointVisibility } from './engine/star.js';
 import { createRings } from './engine/rings.js';
 import { physicalFor } from './engine/physical-data.js';
 import {
@@ -243,6 +243,10 @@ const deepField = new DeepField({
 // past the edge of the survey, both in cells that load around the camera and
 // unload behind it. See engine/cosmos.js.
 const cosmos = new Cosmos({ deepField, colorLookup });
+{
+  const gl = renderer.getContext();
+  cosmos.sprites.setMaxPointSize(gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)?.[1] ?? 0);
+}
 for (const object of cosmos.underlay) scene.add(object);
 for (const object of deepField.objects) scene.add(object);
 for (const object of cosmos.objects) scene.add(object);
@@ -1878,7 +1882,18 @@ function groundUnder(key, point, now) {
 function floorBeforeControls(resolved, now) {
   cameraGround.altitudeKm = Infinity;
   controls.minDistanceRadii = 1.000001;
+  controls.horizon = null;
   if (controls.mode === 'roam' || state.viewFromEarth || state.riding || !resolved) return;
+  // A galaxy has no surface to stop at. Held a radius out, you could look at
+  // the Magellanic Clouds but never go into them, among their stars.
+  if (resolved.kind === 'galaxy') {
+    controls.minDistanceRadii = 1e-9;
+    return;
+  }
+  if (resolved.kind === 'craft') {
+    horizonForCraft(resolved, now);
+    return;
+  }
   const ground = groundUnder(resolved.key, controls.worldPosition, now);
   if (!ground) return;
   const radius = resolved.radius;
@@ -1888,7 +1903,42 @@ function floorBeforeControls(resolved, now) {
   cameraGround.altitudeKm = ground.distance - radius - ground.groundKm;
 }
 
-function floorAfterControls(now) {
+/**
+ * A craft on the ground, or just above it, is orbited like anything else, but
+ * half of that orbit is underground. The floor there is a horizon: the camera
+ * stays above the plane of the ground at the craft, and higher still if the
+ * terrain under the camera rises above the craft's own footing.
+ */
+const horizonUp = new Vector3();
+function horizonForCraft(resolved, now) {
+  const item = craftField.get(craftKeyOf(resolved.key));
+  const surface = surfaceOf(item?.centreKey);
+  if (!item || !surface || !resolved.position) return;
+  horizonUp.copy(resolved.position).sub(surface.position);
+  const fromCentre = horizonUp.length();
+  if (!(fromCentre > 0)) return;
+  horizonUp.multiplyScalar(1 / fromCentre);
+  const craftAltKm = fromCentre - surface.radius;
+  if (!item.onSurface && craftAltKm > Math.max(3, surface.radius * 0.002)) return;
+  const distanceKm = controls.distanceRadii * resolved.radius;
+  let minSin = Math.sin((3 * Math.PI) / 180);
+  const ground = groundUnder(item.centreKey, controls.worldPosition, now);
+  if (ground && distanceKm > 0) {
+    // The clearance scales with the orbit: a rover is a couple of metres
+    // across and is framed from ten, so a fixed eye height would put the
+    // camera straight overhead.
+    const clearance = Math.min(GROUND_CLEARANCE_KM, distanceKm * 0.06);
+    const need = (ground.groundKm + clearance - craftAltKm) / distanceKm;
+    minSin = Math.max(minSin, need);
+  }
+  controls.horizon = { up: horizonUp, minSin: Math.min(minSin, 0.97) };
+}
+
+function floorAfterControls(now, resolved) {
+  if (controls.mode === 'orbit') {
+    orbitFloorAfterControls(now, resolved);
+    return;
+  }
   if (controls.mode !== 'roam' || !roamNearest.key) return;
   const point = ship.active ? ship.worldPosition(controls, tmpShipWorld) : tmpShipWorld.copy(controls.worldPosition);
   const ground = groundUnder(roamNearest.key, point, now);
@@ -1908,6 +1958,28 @@ function floorAfterControls(now) {
     if (into < 0) ship.velocity.addScaledVector(up, -into);
     ship.speed = Math.min(ship.speed, ship.velocity.length());
   }
+}
+
+/**
+ * The floor set before the controls moved is for where the camera was. Orbit
+ * a few metres up and a drag carries it sideways into the next rise before
+ * that floor catches up, and for a frame the view is from inside the ground:
+ * the planet's back faces, the patch skirts as a grid, or nothing at all. So
+ * the new position is checked against the ground under it as well, and lifted
+ * along the same line of sight if it went in.
+ */
+function orbitFloorAfterControls(now, resolved) {
+  if (!resolved || resolved.kind === 'galaxy' || resolved.kind === 'craft') return;
+  if (state.viewFromEarth || state.riding || controls.flying) return;
+  const ground = groundUnder(resolved.key, controls.worldPosition, now);
+  if (!ground) return;
+  const floor = ground.radius + ground.groundKm + GROUND_CLEARANCE_KM;
+  if (ground.distance >= floor) return;
+  const lifted = controls.distanceRadii * (floor / Math.max(ground.distance, 1e-9));
+  controls.distanceRadii = lifted;
+  controls.originOffset.multiplyScalar(floor / Math.max(ground.distance, 1e-9));
+  controls.worldPosition.copy(controls.targetPosition).add(controls.originOffset);
+  cameraGround.altitudeKm = GROUND_CLEARANCE_KM;
 }
 
 function updateRoamFrame() {
@@ -2534,7 +2606,7 @@ function frame(now) {
       : null,
   );
 
-  floorAfterControls(now);
+  floorAfterControls(now, resolved);
   const cam = controls.worldPosition;
   updateCameraFrame();
   // Anything that took the camera out of roam — a flight, a mode button — has
@@ -2586,6 +2658,10 @@ function frame(now) {
     // Sunlight where the camera is, at the exposure everything else is being
     // drawn at, which is what decides how a Sun too small to resolve is drawn.
     brightness: exposureScale / Math.max((sunDistance / 149597870.7) ** 2, 1e-6),
+    // An ordinary star from far enough away: fifteenth magnitude from a
+    // kiloparsec, where it had been a blazing point out to the edge of the
+    // universe.
+    visibility: pointVisibility(1, sunDistance, 8.7 + 2.5 * Math.log10(Math.max(58 / Math.max(camera.fov, 1e-4), 1))),
   });
   considerUpgrade('sun', (SUN.radiusKm / sunDistance) * pixelsPerRadian * 2);
 
@@ -2891,8 +2967,13 @@ function frame(now) {
    * The meshes are kept rather than disposed: they are cached per star because
    * building one is not free, and hiding is enough.
    */
+  //
+  // A star whose system has loaded is drawn by the system, and the system's
+  // star is the one that gets placed below. The cached sphere — built on the
+  // way in, before the system existed — has to go dark then, or it is left
+  // visible at its last offset and rides along with the camera.
   for (const [key, mesh] of starMeshes) {
-    mesh.group.visible = key === resolved?.key;
+    mesh.group.visible = key === resolved?.key && exoSystem?.key !== key;
   }
 
   if (resolved?.kind === 'star' && resolved.key !== 'sun') {
@@ -2952,6 +3033,7 @@ function frame(now) {
     pxPerRad: renderer.domElement.height / (2 * Math.tan((camera.fov * Math.PI) / 360)),
     sunDistanceKm: fromSun,
     cameraDistanceToSunKm: fromSun,
+    farKm: camera.far,
   });
   if (gaia) {
     gaia.points.visible = deepField.showStars && fromSun < 8000 * PC_KM;

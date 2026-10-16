@@ -4,6 +4,7 @@ import {
   BufferAttribute,
   BufferGeometry,
   CustomBlending,
+  Group,
   Points,
   ShaderMaterial,
   SrcColorFactor,
@@ -65,6 +66,7 @@ const GLOW_VERTEX = /* glsl */ `
   uniform float uPxPerRad;
   uniform float uOpacity;
   uniform float uMaxPx;
+  uniform float uKnotPc;
   varying vec3 vColor;
   void main() {
     vec3 pos = uCenter + uU * position.x + uW * position.y + uN * position.z;
@@ -76,7 +78,11 @@ const GLOW_VERTEX = /* glsl */ `
     // From inside one, a sprite would be a wall of light; the star cells are
     // drawing those stars by then. Nor can a point outgrow what the GPU allows.
     float near = smoothstep(sizeKm * 1.5, sizeKm * 5.0, dist);
-    float big = 1.0 - smoothstep(uMaxPx * 0.55, uMaxPx, px);
+    // Knots are the smallest sprites. Up close they are star-forming regions
+    // whose stars the cells are drawing, not balls of pink light filling the
+    // screen, so they go long before the broad glow does.
+    float cap = aSize < uKnotPc ? 56.0 : uMaxPx;
+    float big = 1.0 - smoothstep(cap * 0.55, cap, px);
     vColor = aColor * uOpacity * gain * near * big;
     gl_PointSize = clamp(px, 2.0, uMaxPx);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
@@ -171,6 +177,7 @@ function frameUniforms() {
     uPxPerRad: { value: 1000 },
     uOpacity: { value: 0 },
     uMaxPx: { value: MAX_POINT_PX },
+    uKnotPc: { value: 0 },
   };
 }
 
@@ -264,8 +271,8 @@ function* build(slot, frame) {
     let weight = ((rho / cap) / (chance * (size / base) ** 2)) * (smooth ? 0.3 : 0.57);
     if (knot) {
       colour = random() < 0.6 ? HII : YOUNG;
-      weight *= (size / (R * 0.007)) ** 2 * 0.25;
-      size = R * (0.004 + random() * 0.006);
+      weight *= (size / (R * 0.005)) ** 2 * 0.25;
+      size = R * (0.003 + random() * 0.0045);
     }
     const jitter = 0.85 + random() * 0.3;
     gp[placed * 3] = x;
@@ -406,9 +413,21 @@ export class GalaxySprites {
       this.dustObjects.push(slot.dust.points);
       this.starObjects.push(slot.stars.points);
     }
-    /** All glow first, then all dust, so dust darkens every galaxy's light behind it. */
-    this.objects = [...this.glowObjects, ...this.dustObjects, ...this.starObjects];
+    this.group = new Group();
+    for (const object of [...this.glowObjects, ...this.dustObjects, ...this.starObjects]) this.group.add(object);
+    this.objects = [this.group];
     this.visible = true;
+    /** Largest point the GPU draws, in device pixels; see setMaxPointSize. */
+    this.maxPointPx = MAX_POINT_PX;
+  }
+
+  /**
+   * Sprites larger than the GPU's point limit are faded out rather than
+   * clipped, so the limit decides how close a galaxy can be approached before
+   * its broad glow goes. Most GPUs allow 511 or more.
+   */
+  setMaxPointSize(px) {
+    if (px > 0) this.maxPointPx = Math.max(MAX_POINT_PX, Math.min(px, 1024));
   }
 
   /** Billboard brightness for a galaxy: 1 when no slot draws it, less while one does. */
@@ -465,6 +484,18 @@ export class GalaxySprites {
 
     const pxOf = new Map(wanted.map((w) => [w.frame.key, w.px]));
     const step = 1 - Math.exp(-dt * 3);
+    // Furthest galaxy first, its glow then its dust, then the next nearer.
+    // Drawing every glow before every dust let the Milky Way's lanes, fifty
+    // kiloparsecs behind, darken the Magellanic Clouds in front of it. The
+    // renderer does not sort, so this is the order of the group's children.
+    const order = this.slots
+      .filter((s) => s.frame)
+      .sort((a, b) => b.frame.center.distanceToSquared(cameraWorld) - a.frame.center.distanceToSquared(cameraWorld));
+    const children = this.group.children;
+    children.length = 0;
+    for (const slot of order) children.push(slot.glow.points, slot.dust.points);
+    for (const slot of this.slots) if (!slot.frame) children.push(slot.glow.points, slot.dust.points);
+    for (const slot of this.slots) children.push(slot.stars.points);
     for (const slot of this.slots) {
       const f = slot.frame;
       const px = f ? pxOf.get(f.key) ?? 0 : 0;
@@ -486,6 +517,8 @@ export class GalaxySprites {
         u.uN.value.copy(f.n).multiplyScalar(PC_KM);
         u.uPxPerRad.value = pxPerRad;
         u.uOpacity.value = slot.fade;
+        u.uMaxPx.value = this.maxPointPx;
+        u.uKnotPc.value = (f.radiusKm / PC_KM) * 0.0076;
         if (u.uPixelRatio) u.uPixelRatio.value = pixelRatio;
         if (u.uNearKm) u.uNearKm.value = f.radiusKm * 0.04;
       }

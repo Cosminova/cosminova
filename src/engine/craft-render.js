@@ -70,6 +70,8 @@ const MESH_FADE_OUT = 3.5;
  */
 const MARKER_MAX_ALPHA = 0.5;
 const MARKER_MIN_ALPHA = 0.1;
+/** Markers fade out between these distances from the camera: a few thousand AU. */
+const MARKER_FAR_KM = [3e11, 3e12];
 
 const MARKER_VERTEX = /* glsl */`
   #include <common>
@@ -394,7 +396,9 @@ export function createCraftRenderer(field) {
         // marker is at its brightest exactly where it hands off.
         const flux = Math.min(1, (apparent / MESH_FADE_IN) ** 2);
         const reach = MARKER_MIN_ALPHA + (MARKER_MAX_ALPHA - MARKER_MIN_ALPHA) * flux;
-        const markerAlpha = (1 - meshFade) * reach;
+        // The floor keeps a far craft findable inside the Solar System; from
+        // the next star over it put every probe ever flown on one bright point.
+        const markerAlpha = (1 - meshFade) * reach * (1 - smooth(distance, MARKER_FAR_KM[0], MARKER_FAR_KM[1]));
         detail.set(state.key, { distance, apparent, meshFade, markerAlpha });
         if (markerAlpha > 0.01) {
           const selected = state.key === selectedKey;

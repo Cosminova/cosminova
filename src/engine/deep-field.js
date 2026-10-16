@@ -336,9 +336,23 @@ function mulberry32(seed) {
   };
 }
 
+/**
+ * Magellanic types — Sm, SBm, SB(s)m — are named for the Clouds: one-armed or
+ * armless, clumpy, often with an off-centre bar. Read as late spirals they got
+ * a grand-design pair of arms and dust lanes they do not have.
+ */
+function isMagellanic(morph) {
+  return /^S[AB]*(\([rs]+\))?m\b/.test(morph.trim()) || /^IB?m\b/.test(morph.trim());
+}
+
+/** Morph codes for the Magellanic irregulars, barred and not; both read as irregular. */
+export const MAGELLANIC_BARRED = 5.75;
+export const MAGELLANIC = 5.65;
+
 export function morphColour(morph = '') {
   const m = morph.toUpperCase();
   if (m.startsWith('E') || m.startsWith('S0')) return [1.0, 0.82, 0.58];
+  if (isMagellanic(morph)) return [0.74, 0.8, 0.94];
   if (m.includes('IRR') || m.startsWith('IB') || m.startsWith('I')) return [0.7, 0.78, 0.92];
   if (m.startsWith('SB') || m.startsWith('SA')) return [0.78, 0.8, 0.88];
   return [0.82, 0.8, 0.78];
@@ -348,6 +362,7 @@ export function morphCode(morph = '') {
   const m = morph.toUpperCase();
   if (m.startsWith('E')) return 0;
   if (m.startsWith('S0') || m.startsWith('L')) return 1;
+  if (isMagellanic(morph)) return m.includes('SB') || m.startsWith('IB') ? MAGELLANIC_BARRED : MAGELLANIC;
   if (m.includes('SB')) {
     if (m.includes('C') || m.includes('D') || m.includes('M')) return 5;
     return 4;
@@ -788,7 +803,14 @@ export class DeepField {
     this.galaxyOffsetAttr.needsUpdate = true;
 
     const kpc = sunDistanceKm / KPC_KM;
-    const mwFade = clamp((Math.log10(Math.max(kpc, 1e-6)) + 0.3) / 1.4, 0, 1);
+    // Tens of thousands of particles summed into a pixel or two are a blazing
+    // dot, not a galaxy; once it is that small the far field draws it as one.
+    const mwPx = viewPxPerRad > 0 ? (2 * 0.82 * 15 * KPC_KM * viewPxPerRad) / Math.max(sunDistanceKm, 1) : 1e9;
+    // Its light per pixel is held to what it is with the disc a couple of
+    // hundred pixels across, so as it shrinks it does not condense into a lamp.
+    const mwSmall = clamp((mwPx - GALAXY_MIN_PX) / (GALAXY_FULL_PX - GALAXY_MIN_PX), 0, 1)
+      * Math.min(1, (mwPx / 220) ** 2);
+    const mwFade = clamp((Math.log10(Math.max(kpc, 1e-6)) + 0.3) / 1.4, 0, 1) * mwSmall;
     this.mwMaterial.uniforms.opacity.value = mwFade * 0.14;
     this.milkyWay.points.visible = mwFade > 0.02;
     if (this.milkyWay.points.visible) {

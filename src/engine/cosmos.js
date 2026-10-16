@@ -17,6 +17,7 @@ import { STAR_FRAGMENT, STAR_VERTEX, morphCode, morphColour } from './deep-field
 import { platform } from './platform.js';
 import { properName, sampleMagnitude, starFromMagnitude, starsInBand } from './procgen.js';
 import { GalaxySprites, HANDOVER_PX } from './galaxy-sprites.js';
+import { GalaxyField } from './galaxy-field.js';
 import {
   SUN_GC_PC, cosmicWeb, discSurface, expectedInBox, gaussian, hashCell, makeModel, mix32, mulberry, poisson, spheroid,
 } from './galaxy-model.js';
@@ -129,8 +130,11 @@ export class Cosmos {
     this._spritePlanAt = -Infinity;
     this._spriteAt = performance.now();
     this._dimmedCatalog = new Set();
+    this.field = new GalaxyField();
+    this._catalogPoints = this._catalogPointList();
+    this._nearAnchor = new Vector3();
     /** Drawn before the catalogue stars, so galaxy dust never darkens a star in front of it. */
-    this.underlay = this.sprites.objects;
+    this.underlay = [...this.field.objects, ...this.sprites.objects];
     this.objects = [this.galaxyMesh, this.starPoints];
   }
 
@@ -163,6 +167,8 @@ export class Cosmos {
       morph: 4.2,
       seed: 0x4d57,
       holeKey: 'bh:sgr-a',
+      luminosity: 1.2,
+      colour: [0.9, 0.85, 0.78],
     };
   }
 
@@ -202,6 +208,51 @@ export class Cosmos {
     };
     this.catalogFrames.set(index, frame);
     return frame;
+  }
+
+  /**
+   * The real galaxies as the far field draws them once they are too small
+   * for a billboard: world position in Mpc, absolute magnitude, and the
+   * half-width the billboard is sized by.
+   */
+  _catalogPointList() {
+    const df = this.deepField;
+    const list = [];
+    for (let i = 0; i < df.galaxies.count; i++) {
+      const g = df.galaxyRecords[i];
+      const i3 = i * 3;
+      const dPc = Math.max((g.d ?? 10) * 1e6, 1e4);
+      list.push({
+        x: df.galaxyWorld[i3] / MPC_KM,
+        y: df.galaxyWorld[i3 + 1] / MPC_KM,
+        z: df.galaxyWorld[i3 + 2] / MPC_KM,
+        absMag: (g.mag ?? 12) - 5 * Math.log10(dPc) + 5,
+        radiusMpc: (df.galaxySizeKm[i] * 0.82) / MPC_KM,
+        colour: morphColour(g.morph),
+      });
+    }
+    return list;
+  }
+
+  _repackNearPoints(cam) {
+    const s = GALAXY_CELL_MPC;
+    const anchor = this._nearAnchor.set(
+      (Math.floor(cam.x / MPC_KM / s) + 0.5) * s,
+      (Math.floor(cam.y / MPC_KM / s) + 0.5) * s,
+      (Math.floor(cam.z / MPC_KM / s) + 0.5) * s,
+    );
+    const list = this._catalogPoints.slice();
+    for (const g of this.galaxyList) {
+      list.push({
+        x: g.center.x / MPC_KM,
+        y: g.center.y / MPC_KM,
+        z: g.center.z / MPC_KM,
+        absMag: -20.6 - 2.5 * Math.log10(Math.max(g.luminosity, 1e-4)),
+        radiusMpc: (g.radiusKm * 0.82) / MPC_KM,
+        colour: g.colour,
+      });
+    }
+    this.field.setNear(list, anchor);
   }
 
   /** The galaxy whose stars are being generated around the camera, if any. */
@@ -538,7 +589,10 @@ export class Cosmos {
   }
 
   _repackGalaxies() {
-    const list = [];
+    // The Milky Way had no billboard of its own, only its sprites and the
+    // particle cloud, so between those giving out and its point taking over
+    // home was simply missing from the sky.
+    const list = [this.milkyWay];
     for (const cell of this.galaxyCells.values()) {
       for (const g of cell.galaxies) {
         if (list.length >= this.galaxyCap) break;
@@ -547,7 +601,7 @@ export class Cosmos {
     }
     this.galaxyList = list;
     this.generatedGalaxies.clear();
-    for (const g of list) this.generatedGalaxies.set(g.key, g);
+    for (const g of list) if (g.kind === 'generated') this.generatedGalaxies.set(g.key, g);
     for (let q = 0; q < list.length; q++) {
       const g = list[q];
       const r = g.radiusKm;
@@ -580,7 +634,7 @@ export class Cosmos {
     this.sprites.visible = value;
   }
 
-  update({ cameraWorld, pixelRatio, pxPerRad = 1000, sunDistanceKm, cameraDistanceToSunKm, budgetMs = 5 }) {
+  update({ cameraWorld, pixelRatio, pxPerRad = 1000, sunDistanceKm, cameraDistanceToSunKm, farKm = 1e22, budgetMs = 5 }) {
     const cam = cameraWorld;
     const t0 = performance.now();
 
@@ -614,7 +668,14 @@ export class Cosmos {
     if (generatedGalaxies || this._galaxyDirty) {
       this._galaxyDirty = false;
       this._repackGalaxies();
+      this._repackNearPoints(cam);
     }
+    this.field.update({
+      cameraWorld: cam,
+      cssPerRad: pxPerRad / Math.max(pixelRatio, 1),
+      pixelRatio,
+      farKm,
+    });
 
     // Which galaxy the camera is in, and its stars.
     const galaxy = this._pickGalaxy(cam, 2.4);
@@ -693,7 +754,9 @@ export class Cosmos {
         ux = _b.x; uy = _b.y; uz = _b.z;
         vx = _v.x; vy = _v.y; vz = _v.z;
       }
-      const dim = this.sprites.dimFor(g.key);
+      let dim = this.sprites.dimFor(g.key);
+      // From inside or near it, home is the panorama and the real stars.
+      if (g.kind === 'milky-way') dim *= Math.min(1, Math.max(0, (Math.hypot(ox, oy, oz) / g.radiusKm - 5) / 5));
       const r = g.radiusKm * 0.82;
       this.gAxisU.array[q * 3] = ux * r;
       this.gAxisU.array[q * 3 + 1] = uy * r;

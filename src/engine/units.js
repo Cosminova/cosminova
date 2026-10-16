@@ -31,7 +31,10 @@ export function formatDistance(km) {
   if (pc < 1000) return `${pc.toFixed(pc < 10 ? 2 : 1)} pc`;
   const kpc = km / KPC_KM;
   if (kpc < 1000) return `${kpc.toFixed(kpc < 10 ? 2 : 1)} kpc`;
-  return `${(km / MPC_KM).toFixed(km / MPC_KM < 10 ? 2 : 1)} Mpc`;
+  const mpc = km / MPC_KM;
+  if (mpc < 1000) return `${mpc.toFixed(mpc < 10 ? 2 : 1)} Mpc`;
+  const gpc = mpc / 1000;
+  return `${gpc.toLocaleString(undefined, { maximumFractionDigits: gpc < 10 ? 2 : gpc < 1000 ? 1 : 0 })} Gpc`;
 }
 
 /** Order-of-magnitude label for the Powers-of-Ten scale strip. */
@@ -56,6 +59,8 @@ export function scaleStep(km) {
     [16.49, '1 kpc'],
     [19.49, '1 Mpc'],
     [22.49, '1 Gpc'],
+    [23.49, '10 Gpc'],
+    [24.49, '100 Gpc'],
   ];
   void exp;
   const log = Math.log10(abs);

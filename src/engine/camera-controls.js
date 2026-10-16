@@ -37,6 +37,8 @@ const TWO_POINTER_DEADZONE = 10;
  * that two by accident is not a journey.
  */
 const DOUBLE_TAP_ZOOM = -0.05;
+/** About a thousand gigaparsecs: far enough out that the view is all galaxies whatever the target. */
+const MAX_DISTANCE_KM = 3e25;
 
 /**
  * Fold an angle back into (-pi, pi].
@@ -89,6 +91,13 @@ export class OrbitApproachControls {
     this.lookSensitivity = 0.0032;
     this.minDistanceRadii = 1.000001;
     this.maxDistanceRadii = 1e22;
+    /**
+     * For a target sitting on a surface: the ground's up direction there and
+     * the least sine of elevation the camera may have above it. The app sets
+     * it each frame; null leaves the orbit free.
+     */
+    this.horizon = null;
+    this._horizonInverse = new Quaternion();
     this.riding = false;
     this._riderUp = new Vector3(0, 1, 0);
 
@@ -824,11 +833,14 @@ export class OrbitApproachControls {
       if (this.riding) this.setRiding(false);
       else this.earthView = false;
     }
-    this.distanceRadii = clamp(
-      this.distanceRadii * Math.exp(amount),
+    // Capped in kilometres as well as radii. In radii alone a probe a few
+    // metres across ran out of zoom a megaparsec from home, before the
+    // universe had even begun to show.
+    const ceiling = Math.max(
       this.minDistanceRadii,
-      this.maxDistanceRadii,
+      Math.max(this.maxDistanceRadii, MAX_DISTANCE_KM / Math.max(this.targetRadius, 1e-9)),
     );
+    this.distanceRadii = clamp(this.distanceRadii * Math.exp(amount), this.minDistanceRadii, ceiling);
   }
 
   get altitudeKm() {
@@ -911,6 +923,37 @@ export class OrbitApproachControls {
    * chose has to come back when they leave it — so remember it on the way in
    * rather than restoring a hardcoded number on the way out.
    */
+  /**
+   * Holds an orbit around something on a surface above that surface's
+   * horizon. Below it the camera is underground, where terrain is all back
+   * faces: the planet vanishes and only the seams between patches show.
+   *
+   * The bearing is pushed up onto the cone and written back into yaw and
+   * pitch, so a drag that keeps pulling downwards slides along the ground
+   * instead of fighting a correction every frame.
+   */
+  _keepAboveHorizon() {
+    const { up, minSin } = this.horizon;
+    const s = this._offset.dot(up);
+    if (s >= minSin) return;
+    this._offset.addScaledVector(up, -s);
+    const flat = this._offset.length();
+    if (flat < 1e-9) {
+      this._offset.copy(up);
+    } else {
+      this._offset.multiplyScalar(Math.sqrt(1 - minSin * minSin) / flat).addScaledVector(up, minSin);
+    }
+    const local = this._forward.copy(this._offset);
+    if (this.bodyFrame) local.applyQuaternion(this._horizonInverse.copy(this.bodyFrame).invert());
+    // Kept on whichever side of the pole the pitch was already on, so the
+    // write-back never flips the up vector built from it.
+    const over = Math.cos(this.pitch) < 0;
+    const p = Math.asin(clamp(local.y, -1, 1));
+    this.pitch = over ? (p >= 0 ? Math.PI - p : -Math.PI - p) : p;
+    this.yaw = over ? Math.atan2(-local.x, -local.z) : Math.atan2(local.x, local.z);
+    if (this.pitchVelocity * (over ? -1 : 1) < 0) this.pitchVelocity = 0;
+  }
+
   setGroundView(enabled, groundFov = 58) {
     if (enabled && !this.earthView) this._fovBeforeGround = this.fov;
     this.earthView = enabled;
@@ -1065,7 +1108,7 @@ export class OrbitApproachControls {
 
     if (this.cruise) {
       this.zoomBy(this.cruise * dt);
-      if (this.distanceKm > 3.086e19) this.cruise = 0;
+      if (this.distanceKm > 3.086e23) this.cruise = 0;
     }
     if (Math.abs(this.zoomVelocity) > 1e-7) {
       this.zoomBy(this.zoomVelocity * dt * 60);
@@ -1186,6 +1229,7 @@ export class OrbitApproachControls {
       const camDist = Math.max(this.worldPosition.distanceTo(targetPosition), 1e-9);
       this.distanceRadii = camDist / Math.max(targetRadius, 1e-6);
     } else {
+      if (!flight && this.horizon) this._keepAboveHorizon();
       if (!flight) {
         this.originKey = this.targetKey;
         this.originOffset.copy(this._offset).multiplyScalar(distanceKm);
