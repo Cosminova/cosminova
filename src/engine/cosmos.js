@@ -16,6 +16,10 @@ import { hashName } from './classify.js';
 import { STAR_FRAGMENT, STAR_VERTEX, morphCode, morphColour } from './deep-field.js';
 import { platform } from './platform.js';
 import { properName, sampleMagnitude, starFromMagnitude, starsInBand } from './procgen.js';
+import { GalaxySprites, HANDOVER_PX } from './galaxy-sprites.js';
+import {
+  SUN_GC_PC, cosmicWeb, discSurface, expectedInBox, gaussian, hashCell, makeModel, mix32, mulberry, poisson, spheroid,
+} from './galaxy-model.js';
 import { equatorialToEcliptic, KPC_KM, MPC_KM, PC_KM } from './units.js';
 
 /**
@@ -60,214 +64,7 @@ const GALAXY_BLOCK_RADIUS = 3;
 const GALAXY_DENSITY = 0.016;
 const CATALOGUE_FADE_MPC = [45, 90];
 
-const SUN_GC_PC = 8178;
 const SUN_Z_PC = 20;
-
-// --------------------------------------------------------------- randomness
-
-function mix32(h) {
-  h ^= h >>> 16;
-  h = Math.imul(h, 0x7feb352d);
-  h ^= h >>> 15;
-  h = Math.imul(h, 0x846ca68b);
-  h ^= h >>> 16;
-  return h >>> 0;
-}
-
-function hashCell(seed, level, i, j, k) {
-  let h = mix32(seed ^ 0x9e3779b9);
-  h = mix32(h ^ Math.imul(level + 17, 0x27d4eb2d));
-  h = mix32(h ^ Math.imul(i | 0, 0x165667b1));
-  h = mix32(h ^ Math.imul(j | 0, 0x2545f491));
-  h = mix32(h ^ Math.imul(k | 0, 0x6c8e9cf5));
-  return h || 1;
-}
-
-function mulberry(seed) {
-  let a = seed >>> 0;
-  return () => {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
-
-function poisson(random, mean) {
-  if (mean <= 0) return 0;
-  if (mean > 40) return Math.max(0, Math.round(mean + Math.sqrt(mean) * gaussian(random)));
-  const limit = Math.exp(-mean);
-  let k = 0;
-  let p = random();
-  while (p > limit && k < 200) {
-    k++;
-    p *= random();
-  }
-  return k;
-}
-
-function gaussian(random) {
-  const u = Math.max(random(), 1e-12);
-  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * random());
-}
-
-/** Smooth value noise in three dimensions, for the cosmic web. */
-function valueNoise3(x, y, z, seed) {
-  const xi = Math.floor(x);
-  const yi = Math.floor(y);
-  const zi = Math.floor(z);
-  const fx = x - xi;
-  const fy = y - yi;
-  const fz = z - zi;
-  const s = (t) => t * t * (3 - 2 * t);
-  const h = (a, b, c) => mix32(hashCell(seed, 99, a, b, c)) / 4294967296;
-  const ux = s(fx);
-  const uy = s(fy);
-  const uz = s(fz);
-  const lerp = (a, b, t) => a + (b - a) * t;
-  return lerp(
-    lerp(lerp(h(xi, yi, zi), h(xi + 1, yi, zi), ux), lerp(h(xi, yi + 1, zi), h(xi + 1, yi + 1, zi), ux), uy),
-    lerp(lerp(h(xi, yi, zi + 1), h(xi + 1, yi, zi + 1), ux), lerp(h(xi, yi + 1, zi + 1), h(xi + 1, yi + 1, zi + 1), ux), uy),
-    uz,
-  );
-}
-
-/**
- * Overdensity of the cosmic web at a point, in Mpc. Ridged noise makes sheets
- * and filaments with voids between them rather than evenly spread blobs; the
- * exponent is what turns the ridges into clusters.
- */
-function cosmicWeb(xMpc, yMpc, zMpc) {
-  let total = 0;
-  let amplitude = 1;
-  let frequency = 1 / 38;
-  for (let o = 0; o < 3; o++) {
-    const n = valueNoise3(xMpc * frequency, yMpc * frequency, zMpc * frequency, 0x51ab + o);
-    total += (1 - Math.abs(n * 2 - 1)) * amplitude;
-    amplitude *= 0.5;
-    frequency *= 2.3;
-  }
-  return Math.exp((total / 1.75 - 0.55) * 4.2);
-}
-
-// ----------------------------------------------------------- galaxy models
-
-const sech2 = (t) => {
-  const c = Math.cosh(Math.min(Math.abs(t), 30));
-  return 1 / (c * c);
-};
-
-/** The shape families the density model knows, from the catalogue morph code. */
-function familyOf(code) {
-  if (code < 0.6) return 'elliptical';
-  if (code < 1.6) return 'lenticular';
-  if (code > 5.5) return 'irregular';
-  return code >= 3.5 ? 'barred' : 'spiral';
-}
-
-/**
- * A galaxy's model, in its own frame: x and y in the disc, z along its axis,
- * all in parsecs. Densities are stars per cubic parsec, normalised to the
- * Milky Way's 0.1 at the Sun.
- */
-function makeModel(galaxy) {
-  const radiusPc = galaxy.radiusKm / PC_KM;
-  const f = Math.max(radiusPc / 15000, 0.02);
-  const family = familyOf(galaxy.morph);
-  const seedPhase = (galaxy.seed % 10000) / 10000 * Math.PI * 2;
-  const model = {
-    family,
-    radiusPc,
-    boundPc: radiusPc * (family === 'elliptical' ? 1.6 : 1.35),
-    discScale: 2600 * f,
-    discHeight: Math.max(300 * f ** 0.6, 25),
-    bulgeScale: (family === 'lenticular' ? 900 : 550) * f,
-    discPeak: family === 'irregular' ? 0.04 : 0.1 * Math.exp(SUN_GC_PC / 2600),
-    bulgePeak: family === 'irregular' ? 0 : family === 'lenticular' ? 3.5 : 2.2,
-    armContrast: family === 'spiral' || family === 'barred' ? 1.0 : 0,
-    arms: family === 'barred' ? 2 : 2 + ((galaxy.seed >>> 3) & 1) * 2,
-    pitch: Math.tan((family === 'barred' ? 13 : 11 + (galaxy.seed % 7)) * Math.PI / 180),
-    phase: seedPhase,
-    barLength: family === 'barred' ? 3200 * f : 0,
-    ellipticalScale: radiusPc * 0.22,
-    flattening: 0.55 + ((galaxy.seed >>> 7) % 40) / 100,
-    seed: galaxy.seed,
-  };
-  // Small galaxies are thinner in surface density as well as smaller.
-  model.discPeak *= Math.min(1, f ** 0.4);
-  return model;
-}
-
-/** Spiral arm modulation at disc position (x, y): 1 on an arm, low between. */
-function armFactor(m, x, y) {
-  if (!m.armContrast) return 1;
-  const R = Math.hypot(x, y) + 1;
-  const theta = Math.atan2(y, x);
-  const phase = m.arms * (theta - Math.log(R / 1000) / m.pitch) + m.phase;
-  const ridge = Math.exp(-((1 - Math.cos(phase)) * 2.6));
-  return 0.42 + 1.75 * ridge;
-}
-
-/** Disc surface term (without the vertical profile), per pc³ at the midplane. */
-function discSurface(m, x, y) {
-  const R = Math.hypot(x, y);
-  if (m.family === 'elliptical') return 0;
-  const truncation = 1 / (1 + Math.exp((R - m.radiusPc) / (m.radiusPc * 0.06)));
-  let d = m.discPeak * Math.exp(-R / m.discScale) * truncation;
-  if (m.family === 'irregular') {
-    const clump = valueNoise3(x / 900, y / 900, 0, m.seed) * valueNoise3(x / 2600, y / 2600, 1, m.seed);
-    d *= 0.2 + 3.2 * clump;
-  }
-  return d * armFactor(m, x, y);
-}
-
-/** Everything that is not the thin disc: bulge, bar, or the whole elliptical. */
-function spheroid(m, x, y, z) {
-  if (m.family === 'elliptical') {
-    const r = Math.hypot(x, y, z / m.flattening);
-    return 40 * Math.exp(-7.67 * ((r / m.ellipticalScale) ** 0.25 - 1)) * 1e-4;
-  }
-  let d = 0;
-  if (m.bulgePeak) {
-    const r = Math.hypot(x, y, z * 1.6);
-    d += m.bulgePeak * Math.exp(-((r / m.bulgeScale) ** 0.9));
-  }
-  if (m.barLength) {
-    const bx = x * Math.cos(m.phase) + y * Math.sin(m.phase);
-    const by = -x * Math.sin(m.phase) + y * Math.cos(m.phase);
-    const q = Math.hypot(bx / m.barLength, by / (m.barLength * 0.3), z / (m.barLength * 0.12));
-    d += 0.9 * Math.exp(-q * 3);
-  }
-  return d;
-}
-
-function densityAt(m, x, y, z) {
-  return discSurface(m, x, y) * sech2(z / m.discHeight) + spheroid(m, x, y, z);
-}
-
-/**
- * Expected stars of every magnitude in an axis-aligned box of the galaxy
- * frame. The disc is integrated through its thickness exactly — a kiloparsec
- * cell is mostly empty space above and below a disc a few hundred parsecs
- * thick, and sampling it at points either misses the disc or hits its
- * midplane — and everything else is sampled at eight points.
- */
-function expectedInBox(m, x0, y0, z0, s) {
-  const zd = m.discHeight;
-  const vertical = zd * (Math.tanh((z0 + s) / zd) - Math.tanh(z0 / zd));
-  let disc = 0;
-  let sph = 0;
-  for (let a = 0; a < 2; a++) {
-    for (let b = 0; b < 2; b++) {
-      const x = x0 + (a + 0.5) * s * 0.5;
-      const y = y0 + (b + 0.5) * s * 0.5;
-      disc += discSurface(m, x, y);
-      for (let c = 0; c < 2; c++) sph += spheroid(m, x, y, z0 + (c + 0.5) * s * 0.5);
-    }
-  }
-  return (disc / 4) * vertical * s * s + (sph / 8) * s * s * s;
-}
 
 // -------------------------------------------------------------- star levels
 
@@ -294,47 +91,6 @@ function buildLevels() {
 const GEN_STAR_VERTEX = STAR_VERTEX
   .replace('attribute vec3 starColor;', 'attribute vec3 starColor;\n  attribute float aSoft;\n  uniform float uSoftFade;')
   .replace('intensity *= visibility;', 'intensity *= visibility * mix(1.0, uSoftFade, aSoft);');
-
-const CLOUD_VERTEX = /* glsl */ `
-  #include <common>
-  #include <logdepthbuf_pars_vertex>
-  attribute vec3 starColor;
-  uniform vec3 uCenter;
-  uniform vec3 uU;
-  uniform vec3 uW;
-  uniform vec3 uN;
-  uniform float uOpacity;
-  uniform float uPixelRatio;
-  uniform float uNearKm;
-  uniform float uPointKm;
-  varying vec3 vColor;
-  void main() {
-    vec3 pos = uCenter + uU * position.x + uW * position.y + uN * position.z;
-    float dist = max(length(pos), 1.0);
-    // Each point stands for a cloud of stars about uPointKm across. Close to,
-    // it is resolved into the real stars of the cell layer, so it bows out
-    // before it can read as one enormous star.
-    float near = smoothstep(uNearKm, uNearKm * 3.0, dist);
-    float size = clamp(uPointKm / dist * 900.0, 1.0, 3.2);
-    vColor = starColor * uOpacity * near;
-    gl_PointSize = size * uPixelRatio;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
-    #include <logdepthbuf_vertex>
-  }
-`;
-
-const CLOUD_FRAGMENT = /* glsl */ `
-  #include <common>
-  #include <logdepthbuf_pars_fragment>
-  varying vec3 vColor;
-  void main() {
-    vec2 pc = (gl_PointCoord - 0.5) * 2.0;
-    float d2 = dot(pc, pc);
-    if (d2 > 1.0) discard;
-    gl_FragColor = vec4(vColor * exp(-d2 * 3.5), 1.0);
-    #include <logdepthbuf_fragment>
-  }
-`;
 
 // --------------------------------------------------------------------- core
 
@@ -368,9 +124,14 @@ export class Cosmos {
 
     this._buildStarLayer();
     this._buildGalaxyLayer();
-    this._buildCloudLayer();
-    this.showClouds = true;
-    this.objects = [this.galaxyMesh, this.starPoints, this.cloudPoints];
+    this.sprites = new GalaxySprites();
+    this._spriteWanted = [];
+    this._spritePlanAt = -Infinity;
+    this._spriteAt = performance.now();
+    this._dimmedCatalog = new Set();
+    /** Drawn before the catalogue stars, so galaxy dust never darkens a star in front of it. */
+    this.underlay = this.sprites.objects;
+    this.objects = [this.galaxyMesh, this.starPoints];
   }
 
   // ----------------------------------------------------------------- frames
@@ -804,99 +565,6 @@ export class Cosmos {
     this.stats.galaxies = list.length;
   }
 
-  // ------------------------------------------------------------ cloud layer
-
-  /**
-   * The galaxy you are near, as a three-dimensional cloud of star clusters
-   * shaped by its own model, in place of the painted disc. Built for one
-   * galaxy at a time, which is the only one close enough for its depth to show.
-   */
-  _buildCloudLayer() {
-    this.cloudCount = platform.deviceClass === 'phone' ? 26000 : 60000;
-    const geometry = new BufferGeometry();
-    this.cloudLocal = new Float32Array(this.cloudCount * 3);
-    this.cloudColors = new Float32Array(this.cloudCount * 3);
-    this.cloudPosAttr = new BufferAttribute(this.cloudLocal, 3);
-    this.cloudColAttr = new BufferAttribute(this.cloudColors, 3);
-    geometry.setAttribute('position', this.cloudPosAttr);
-    geometry.setAttribute('starColor', this.cloudColAttr);
-    geometry.computeBoundingSphere = () => {};
-    this.cloudMaterial = new ShaderMaterial({
-      uniforms: {
-        uCenter: { value: new Vector3() },
-        uU: { value: new Vector3() },
-        uW: { value: new Vector3() },
-        uN: { value: new Vector3() },
-        uOpacity: { value: 0 },
-        uPixelRatio: { value: 1 },
-        uNearKm: { value: 1 },
-        uPointKm: { value: 1 },
-      },
-      vertexShader: CLOUD_VERTEX,
-      fragmentShader: CLOUD_FRAGMENT,
-      blending: AdditiveBlending,
-      depthTest: true,
-      depthWrite: false,
-      transparent: true,
-    });
-    this.cloudPoints = new Points(geometry, this.cloudMaterial);
-    this.cloudPoints.frustumCulled = false;
-    this.cloudPoints.renderOrder = 3;
-    this.cloudPoints.visible = false;
-    this.cloudFor = null;
-  }
-
-  _fillCloud(galaxy) {
-    const m = galaxy.model;
-    const random = mulberry(galaxy.seed ^ 0xc10d);
-    const n = this.cloudCount;
-    const bound = m.boundPc;
-    const zBound = m.family === 'elliptical' ? bound * m.flattening : Math.max(m.discHeight * 6, m.bulgeScale * 2.5);
-    // A peak for rejection, from a coarse scan of the model.
-    let peak = 0;
-    for (let a = -8; a <= 8; a++) {
-      for (let b = -8; b <= 8; b++) {
-        peak = Math.max(peak, densityAt(m, (a / 8) * bound * 0.5, (b / 8) * bound * 0.5, 0));
-      }
-    }
-    peak = Math.max(peak, densityAt(m, 0, 0, 0)) * 1.2;
-    let placed = 0;
-    for (let tries = 0; placed < n && tries < n * 400; tries++) {
-      // Drawn from a density raised to a power below one, so the outskirts and
-      // the arms between them still get points; brightness is then put back.
-      const x = (random() * 2 - 1) * bound;
-      const y = (random() * 2 - 1) * bound;
-      const z = (random() * 2 - 1) * zBound;
-      const rho = densityAt(m, x, y, z);
-      if (random() * peak ** 0.55 > rho ** 0.55) continue;
-      this.cloudLocal[placed * 3] = x;
-      this.cloudLocal[placed * 3 + 1] = y;
-      this.cloudLocal[placed * 3 + 2] = z;
-      const sph = spheroid(m, x, y, z);
-      const disc = rho - sph;
-      const arm = m.armContrast ? Math.max(0, armFactor(m, x, y) - 1) : 0;
-      const young = disc > 0 ? Math.min(1, (disc / Math.max(rho, 1e-12)) * (0.25 + arm * 0.6)) : 0;
-      let r = 1.0;
-      let g = 0.82;
-      let b = 0.6;
-      if (m.family === 'irregular' || young > 0.3) {
-        r = 0.62; g = 0.76; b = 1.0;
-      }
-      if (young > 0.45 && random() < 0.08) {
-        r = 1.0; g = 0.42; b = 0.56;
-      }
-      const lift = (rho / peak) ** 0.45 * (0.55 + random() * 0.9);
-      this.cloudColors[placed * 3] = r * lift;
-      this.cloudColors[placed * 3 + 1] = g * lift;
-      this.cloudColors[placed * 3 + 2] = b * lift;
-      placed++;
-    }
-    this.cloudPoints.geometry.setDrawRange(0, placed);
-    this.cloudPosAttr.needsUpdate = true;
-    this.cloudColAttr.needsUpdate = true;
-    this.cloudFor = galaxy.key;
-  }
-
   // ---------------------------------------------------------------- update
 
   /**
@@ -904,7 +572,15 @@ export class Cosmos {
    * a new cell at some level; generation is spread over frames under a time
    * budget, so crossing many boundaries at warp does not stall a frame.
    */
-  update({ cameraWorld, pixelRatio, sunDistanceKm, cameraDistanceToSunKm, budgetMs = 5 }) {
+  get showClouds() {
+    return this.sprites.visible;
+  }
+
+  set showClouds(value) {
+    this.sprites.visible = value;
+  }
+
+  update({ cameraWorld, pixelRatio, pxPerRad = 1000, sunDistanceKm, cameraDistanceToSunKm, budgetMs = 5 }) {
     const cam = cameraWorld;
     const t0 = performance.now();
 
@@ -1017,7 +693,7 @@ export class Cosmos {
         ux = _b.x; uy = _b.y; uz = _b.z;
         vx = _v.x; vy = _v.y; vz = _v.z;
       }
-      const dim = this.focus === g ? 1 - this._cloudFade : 1;
+      const dim = this.sprites.dimFor(g.key);
       const r = g.radiusKm * 0.82;
       this.gAxisU.array[q * 3] = ux * r;
       this.gAxisU.array[q * 3 + 1] = uy * r;
@@ -1033,46 +709,68 @@ export class Cosmos {
     this.gAxisV.needsUpdate = true;
     this.gParams.needsUpdate = true;
 
-    this._updateCloud(cam, pixelRatio);
+    this._updateSprites(cam, pixelRatio, pxPerRad);
   }
 
-  _updateCloud(cam, pixelRatio) {
-    // The nearest galaxy in units of its own size, out to twelve radii. The
-    // Milky Way has a particle disc and a panorama of its own already.
-    const focus = this._pickGalaxy(cam, 12);
+  /**
+   * Which galaxies are drawn as sprite clouds: the few largest on screen,
+   * re-chosen a few times a second, the rest left as billboards.
+   */
+  _updateSprites(cam, pixelRatio, pxPerRad) {
     const df = this.deepField;
-    // The Milky Way is drawn as a cloud too, but only from outside: from
-    // inside the disc it is the real stars and the panorama.
-    const insideHome = focus?.kind === 'milky-way' && cam.distanceTo(focus.center) < focus.radiusKm * 1.25;
-    if (!focus || insideHome) {
-      if (this.focus?.kind === 'catalog') df.setGalaxyDim(this.focus.catalogIndex, 1);
-      this.focus = null;
-      this._cloudFade = 0;
-      this.cloudPoints.visible = false;
-      return;
+    const now = performance.now();
+    const dt = Math.min((now - this._spriteAt) / 1000, 0.25);
+    this._spriteAt = now;
+    const cssPerRad = pxPerRad / Math.max(pixelRatio, 1);
+    const pxOf = (frame) => (frame.radiusKm / Math.max(cam.distanceTo(frame.center), 1)) * cssPerRad;
+    if (now - this._spritePlanAt > 250) {
+      this._spritePlanAt = now;
+      const floor = HANDOVER_PX[0] * 0.8;
+      const wanted = [];
+      // The Milky Way only from outside; from inside the disc it is the real
+      // stars and the panorama.
+      if (cam.distanceTo(this.milkyWay.center) > this.milkyWay.radiusKm * 1.25) {
+        const px = pxOf(this.milkyWay);
+        if (px > floor) wanted.push({ frame: this.milkyWay, px });
+      }
+      for (let i = 0; i < df.galaxies.count; i++) {
+        const i3 = i * 3;
+        const d = Math.hypot(df.galaxyWorld[i3] - cam.x, df.galaxyWorld[i3 + 1] - cam.y, df.galaxyWorld[i3 + 2] - cam.z);
+        const radius = Math.max(df.galaxySizeKm[i] * 0.5, 300 * PC_KM);
+        if ((radius / Math.max(d, 1)) * cssPerRad > floor) {
+          const frame = this._catalogFrame(i);
+          wanted.push({ frame, px: pxOf(frame) });
+        }
+      }
+      for (const g of this.generatedGalaxies.values()) {
+        const px = pxOf(g);
+        if (px > floor) wanted.push({ frame: g, px });
+      }
+      wanted.sort((a, b) => b.px - a.px);
+      this._spriteWanted = wanted;
     }
-    if (!focus.model) focus.model = makeModel(focus);
-    if (this.focus && this.focus !== focus && this.focus.kind === 'catalog') df.setGalaxyDim(this.focus.catalogIndex, 1);
-    this.focus = focus;
-    if (this.cloudFor !== focus.key) this._fillCloud(focus);
-    const d = cam.distanceTo(focus.center) / focus.radiusKm;
-    // In over the last few radii, completely by two.
-    this._cloudFade = Math.min(1, Math.max(0, (11 - d) / 8));
-    if (focus.kind === 'catalog') df.setGalaxyDim(focus.catalogIndex, 1 - this._cloudFade);
-    const u = this.cloudMaterial.uniforms;
-    u.uCenter.value.subVectors(focus.center, cam);
-    u.uU.value.copy(focus.u).multiplyScalar(PC_KM);
-    u.uW.value.copy(focus.w).multiplyScalar(PC_KM);
-    u.uN.value.copy(focus.n).multiplyScalar(PC_KM);
-    u.uOpacity.value = this._cloudFade * 0.55 * Math.min(1, 60000 / this.cloudCount) ** 0.3;
-    u.uPixelRatio.value = pixelRatio;
-    // Points stand in for regions a few hundred parsecs across; inside one,
-    // the star cells are drawing it properly.
-    u.uNearKm.value = focus.radiusKm * 0.05;
-    u.uPointKm.value = focus.radiusKm * 0.01;
-    hostStarsOff(df, this._cloudFade);
-    if (focus.kind === 'milky-way' && this._cloudFade > 0.05) df.milkyWay.points.visible = false;
-    this.cloudPoints.visible = this.showClouds && this._cloudFade > 0.01;
+    const wanted = this._spriteWanted.map((w) => ({ frame: w.frame, px: pxOf(w.frame) }));
+    this.sprites.update({ cameraWorld: cam, wanted, pxPerRad, pixelRatio, dt });
+
+    // Each galaxy's billboard gives way as its sprites come in.
+    const dimmed = new Set();
+    for (const slot of this.sprites.slots) {
+      const f = slot.frame;
+      if (f?.kind === 'catalog' && slot.fade > 0) {
+        df.setGalaxyDim(f.catalogIndex, 1 - slot.fade);
+        dimmed.add(f.catalogIndex);
+      }
+      if (f?.kind === 'milky-way' && slot.fade > 0.05) df.milkyWay.points.visible = false;
+    }
+    for (const index of this._dimmedCatalog) if (!dimmed.has(index)) df.setGalaxyDim(index, 1);
+    this._dimmedCatalog = dimmed;
+
+    const focus = this._pickGalaxy(cam, 12);
+    const insideHome = focus?.kind === 'milky-way' && cam.distanceTo(focus.center) < focus.radiusKm * 1.25;
+    this.focus = insideHome ? null : focus;
+    // The sprite clouds draw a nearby galaxy's stars; the deep field's older
+    // particle stand-in for them would only double them up.
+    if (df.hostStars?.points) df.hostStars.points.visible = false;
   }
 
   // ---------------------------------------------------------------- queries
@@ -1217,8 +915,5 @@ function mulberry32Like(seed) {
 }
 
 /** The deep field's generic host-galaxy particles give way to the real model. */
-function hostStarsOff(df, fade) {
-  if (fade > 0.05 && df.hostStars?.points) df.hostStars.points.visible = false;
-}
 
 export { KPC_KM };

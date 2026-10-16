@@ -55,8 +55,10 @@ async function frame(tag) {
   const stack = [];
   let slabs = 0;
   let bright = 0;
+  let faint = 0;
   for (let i = 0; i < data.length; i++) {
     if (data[i] > 150) bright++;
+    else faint += data[i];
     if (seen[i] || data[i] < 150) continue;
     const px = [];
     let x0 = width; let x1 = 0; let y0 = height; let y1 = 0;
@@ -89,7 +91,7 @@ async function frame(tag) {
     const sd = Math.sqrt(px.reduce((a, b) => a + (b - mean) ** 2, 0) / n);
     if (n >= 18 && n <= 900 && fill >= 0.33 && fill <= 0.85 && sd <= 26) slabs++;
   }
-  return { slabs, bright };
+  return { slabs, bright, faint };
 }
 
 // Close to a galaxy the billboard hands over to a cloud of its stars, so
@@ -114,13 +116,15 @@ for (const [label, key, radii, before] of VANTAGES) {
   await new Promise((r) => setTimeout(r, 400));
 
   // Whatever the galaxy layer contributes, it is no longer slabs, and it is
-  // still contributing: the frame goes darker without it.
+  // still contributing: the frame goes darker without it. Close to, a galaxy
+  // is mostly soft glow below the bright threshold, so its faint light counts.
   const clean = shown.slabs <= 2;
-  const drawing = shown.bright > withoutGalaxies.bright;
+  const drawing = shown.bright > withoutGalaxies.bright || shown.faint > withoutGalaxies.faint * 1.01;
   if (!clean || !drawing) bad++;
   console.log(`${clean && drawing ? 'ok  ' : 'FAIL'} ${label.padEnd(18)} `
     + `${String(shown.slabs).padStart(3)} slabs (was ${String(before).padStart(3)}), `
-    + `galaxy layer adds ${shown.bright - withoutGalaxies.bright} bright pixels`);
+    + `galaxy layer adds ${shown.bright - withoutGalaxies.bright} bright pixels, `
+    + `${(((shown.faint / Math.max(withoutGalaxies.faint, 1)) - 1) * 100).toFixed(1)}% faint light`);
 }
 
 if (errors.length) console.log(`\nerrors: ${[...new Set(errors)].slice(0, 4).join(' | ')}`);

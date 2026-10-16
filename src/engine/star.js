@@ -7,6 +7,7 @@ import {
   ShaderMaterial,
   Sphere,
   SphereGeometry,
+  Vector2,
   Vector3,
 } from 'three';
 import { TERRAIN_GLSL } from './terrain-glsl.js';
@@ -46,6 +47,11 @@ const SURFACE_FRAGMENT = /* glsl */ `
   uniform float uIntensity;
   uniform float uTime;
   uniform vec3 uCameraLocal;
+  uniform float uGranScale;
+  uniform float uGranContrast;
+  uniform float uSpots;
+  uniform vec2 uLimb;
+  uniform float uSeed;
 
   varying vec3 vDir;
 
@@ -59,22 +65,33 @@ const SURFACE_FRAGMENT = /* glsl */ `
 
     vec3 base = uHasMap > 0.5 ? texture2D(uMap, uv).rgb : uColour;
 
-    // Convective granulation: a fine boiling field over larger supergranules.
-    // Contrast is kept high so the photosphere still reads as a surface once
-    // you are close enough for the disc to fill the frame, instead of a flat
-    // glowing ball.
-    float gran = fbmd(dir * 420.0 + vec3(0.0, uTime * 0.03, 0.0), 5, 2.03, 0.52).x;
-    float cells = fbmd(dir * 70.0 + vec3(uTime * 0.012, 0.0, 0.0), 4, 2.1, 0.5).x;
-    float supergran = fbmd(dir * 18.0, 3, 2.07, 0.45).x;
-    float spots = smoothstep(0.62, 0.82, fbmd(dir * 28.0 + 9.0, 3, 2.15, 0.5).x);
-    float faculae = smoothstep(0.55, 0.9, gran) * (1.0 - spots);
-    base *= 0.72 + 0.38 * gran + 0.16 * cells + 0.10 * supergran;
-    base *= 1.0 - spots * 0.55;
-    base += uColour * faculae * 0.22;
+    // Convective granulation: a fine boiling field over larger supergranules,
+    // its scale and contrast set by the star (see starLook in stellar.js). The
+    // lanes between granules are cooler, so they go redder as well as darker.
+    float gran = fbmd(dir * uGranScale + vec3(uSeed, uTime * 0.03, 0.0), 5, 2.03, 0.52).x;
+    float cells = fbmd(dir * uGranScale * 0.17 + vec3(uTime * 0.012, uSeed, 0.0), 4, 2.1, 0.5).x;
+    float supergran = fbmd(dir * max(uGranScale * 0.043, 1.5) + uSeed, 3, 2.07, 0.45).x;
+    float texture = 0.38 * gran + 0.16 * cells + 0.10 * supergran;
+    base *= 1.0 + (texture - 0.32) * uGranContrast * 2.2;
+    base *= mix(vec3(1.0), vec3(1.0, 0.86, 0.72), (1.0 - gran) * uGranContrast * 0.35);
 
-    // Quadratic limb darkening, coefficients for the visible band.
+    // Starspots: dark, cool umbrae inside a lighter penumbra, in belts either
+    // side of the equator the way the Sun's sit, wider on a heavily spotted star.
+    float belt = exp(-pow((abs(dir.y) - 0.3) / mix(0.12, 0.45, uSpots), 2.0));
+    float field = fbmd(dir * 9.0 + 7.0 + uSeed * 3.0, 4, 2.15, 0.5).x;
+    float spotMask = smoothstep(0.7 - uSpots * 0.5, 0.76 - uSpots * 0.5, field) * belt * step(0.001, uSpots);
+    float umbra = smoothstep(0.78 - uSpots * 0.5, 0.84 - uSpots * 0.5, field) * belt * step(0.001, uSpots);
+    base *= mix(vec3(1.0), vec3(0.62, 0.5, 0.4), spotMask * 0.7);
+    base *= mix(vec3(1.0), vec3(0.32, 0.22, 0.16), umbra);
+    float faculae = smoothstep(0.55, 0.9, gran) * (1.0 - spotMask) * uGranContrast;
+    base += uColour * faculae * 0.45;
+
+    // Quadratic limb darkening, coefficients by temperature.
     float mu = clamp(dot(dir, normalize(uCameraLocal)), 0.0, 1.0);
-    float limb = 1.0 - 0.32 * (1.0 - mu) - 0.23 * (1.0 - mu) * (1.0 - mu);
+    float limb = max(1.0 - uLimb.x * (1.0 - mu) - uLimb.y * (1.0 - mu) * (1.0 - mu), 0.05);
+    // The limb of a cool star is redder as well as darker: you are seeing
+    // higher, cooler layers there.
+    base *= mix(vec3(1.0), vec3(1.0, 0.8, 0.62), (1.0 - mu) * uLimb.x * 0.6);
 
     gl_FragColor = vec4(base * uIntensity * limb, 1.0);
   }
@@ -186,7 +203,8 @@ export function pointGlare(brightness) {
 }
 
 export class Star {
-  constructor({ radiusKm, colour = [1.0, 0.94, 0.86], intensity = 2.8 }) {
+  constructor({ radiusKm, colour = [1.0, 0.94, 0.86], intensity = 2.8, look = null }) {
+    const surface = look ?? { granScale: 420, granContrast: 0.46, spots: 0.12, limb: [0.32, 0.23], seed: 0 };
     this.radius = radiusKm;
     this.group = new Group();
 
@@ -200,6 +218,11 @@ export class Star {
         uIntensity: { value: intensity },
         uTime: { value: 0 },
         uCameraLocal: { value: new Vector3(0, 0, radiusKm * 4) },
+        uGranScale: { value: surface.granScale },
+        uGranContrast: { value: surface.granContrast },
+        uSpots: { value: surface.spots },
+        uLimb: { value: new Vector2(...surface.limb) },
+        uSeed: { value: surface.seed },
       },
       vertexShader: SURFACE_VERTEX,
       fragmentShader: SURFACE_FRAGMENT,

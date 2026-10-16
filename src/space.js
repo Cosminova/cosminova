@@ -50,7 +50,8 @@ import { ExoSystem, exoKey, teffToBv } from './engine/exo-system.js';
 import { inventBlackHoleSystems, inventGalaxySystems } from './engine/generated.js';
 import { BlackHole, BLACK_HOLES } from './engine/black-hole.js';
 import { buildColorLookup, colorIndexToLinearRgb } from './color.js';
-import { describeStar, spectralTemperature, surfaceBrightness, SOLAR_TEFF } from './engine/stellar.js';
+import { describeStar, spectralTemperature, starLook, starTint, surfaceBrightness, SOLAR_TEFF } from './engine/stellar.js';
+import { hashName } from './engine/classify.js';
 import { createDitherPass } from './dither.js';
 import { createAmbient, sceneWeights } from './engine/ambient.js';
 import { createDistantBodies } from './engine/distant-bodies.js';
@@ -149,6 +150,20 @@ renderer.toneMapping = ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1;
 renderer.autoClear = false;
 renderer.sortObjects = false;
+// three asks for the context back when the GPU drops it (memory pressure, a
+// driver reset, a Mac waking from sleep) and rebuilds everything from the
+// data it still holds. If the GPU never hands it back, the canvas stays black
+// and dead, so start again rather than leave a frozen frame.
+let contextLost = false;
+canvas.addEventListener('webglcontextlost', () => {
+  contextLost = true;
+  setTimeout(() => {
+    if (contextLost) location.reload();
+  }, 5000);
+});
+canvas.addEventListener('webglcontextrestored', () => {
+  contextLost = false;
+});
 
 const scene = new Scene();
 const camera = new PerspectiveCamera(52, 1, 0.001, 1e22);
@@ -211,20 +226,25 @@ textures = new BodyTextures(await fetch('textures/bodies.json').then((r) => r.js
 // dilution is meant to match what a dark-adapted eye reports, but that argument
 // applies to a naked-eye sky and this is a telescope: the reds and blues the
 // catalogue's colour indices carry are worth seeing, and washing them out was
-// most of why the field looked like grey grain.
-const colorLookup = buildColorLookup(1024, 1);
+// most of why the field looked like grey grain. Past physical, even, as
+// SpaceEngine does: a point a few pixels wide goes through the tone curve at
+// its core and comes out near white, and only a stronger tint survives into
+// the halo where the eye reads colour, so M stars read orange and B stars blue
+// instead of all of them cream.
+const colorLookup = buildColorLookup(1024, 1.6);
 const deepField = new DeepField({
   catalog: data.catalog,
   galaxies: data.galaxies,
   colorLookup,
   maxPointSize: platform.maxPointSize,
 });
-for (const object of deepField.objects) scene.add(object);
 
 // Past the catalogues: stars generated inside every galaxy, galaxies generated
 // past the edge of the survey, both in cells that load around the camera and
 // unload behind it. See engine/cosmos.js.
 const cosmos = new Cosmos({ deepField, colorLookup });
+for (const object of cosmos.underlay) scene.add(object);
+for (const object of deepField.objects) scene.add(object);
 for (const object of cosmos.objects) scene.add(object);
 // The Gaia stars arrive after the first frames; see the end of this file.
 let gaia = null;
@@ -405,11 +425,19 @@ await Promise.all([
 ]);
 
 const upgraded = new Set();
+// Only what is applied below; anything else fetched at this tier sat on the
+// GPU unused (Earth's 8192 cloud map, for one).
+const NEAR_KINDS = ['colour', 'night'];
 function considerUpgrade(key, apparentPixels) {
   if (upgraded.has(key) || apparentPixels < platform.nearUpgradePixels) return;
   upgraded.add(key);
-  const kinds = Object.keys(textures.manifest?.[key] ?? {}).filter((k) => k !== 'dem');
+  const kinds = NEAR_KINDS.filter((k) => textures.entry(key, k, 'near'));
   textures.ensureNear(key, kinds).then(() => {
+    // Left behind while the download was still running.
+    if (!upgraded.has(key)) {
+      textures.releaseNear(key);
+      return;
+    }
     const planet = planets.get(key);
     const colour = textures.best(key, 'colour');
     if (key === 'sun') {
@@ -421,6 +449,37 @@ function considerUpgrade(key, apparentPixels) {
     const night = textures.best(key, 'night');
     if (night) planet.setNightMap(night.texture);
   });
+}
+
+/**
+ * The other half of considerUpgrade: once a body is small on screen again and
+ * is not what you are looking at, its large maps go back to the small ones and
+ * are freed. Only the place you are has its full detail loaded, the way only
+ * the chunks around a player are. The gap between the two thresholds stops a
+ * body at the boundary from loading and freeing over and over.
+ */
+function considerRelease(key, apparentPixels) {
+  if (key === state.target || apparentPixels > platform.nearUpgradePixels * 0.3) return;
+  if (upgraded.has(key)) {
+    upgraded.delete(key);
+    const colour = textures.far(key, 'colour');
+    const night = textures.far(key, 'night');
+    if (key === 'sun') {
+      if (colour) sun.setMap(colour);
+    } else {
+      const planet = planets.get(key);
+      if (planet && colour) planet.setColourMap(colour);
+      if (planet && night) planet.setNightMap(night);
+    }
+    textures.releaseNear(key);
+  }
+  const planet = planets.get(key);
+  if (planet?.spec.dem && apparentPixels < 40) {
+    const dem = textures.demLevel(key, 256);
+    if (dem) planet.setDemMap(dem.texture, dem.info);
+    const normals = textures.level(key, 'norm', 512);
+    if (normals) planet.setNormalMap(normals.texture);
+  }
 }
 
 const destinations = [];
@@ -725,13 +784,14 @@ function starProfile(dest) {
     // curve compresses the brightest channel hardest, so the disc converges on
     // cream exactly as it gets big enough to look at. Saturating first is what
     // survives that. Measured, not guessed: see scripts/_star-tune.mjs.
-    colour: colorIndexToLinearRgb(teffToBv(teff), 2.2),
+    colour: starTint(teff),
     // And kept below the clipping point, for the same reason. A disc sitting
     // over it is tone mapped towards white whatever colour it was given, so a
     // red supergiant has to be allowed to be dimmer than the sun — which is
     // also true of it: surface brightness goes with temperature, and this one
     // is 3600 K against the sun's 5772.
     intensity: 0.95 * surfaceBrightness(teff),
+    look: starLook(teff, radiusSol, hashName(dest.key ?? dest.name ?? '')),
   };
   return dest._profile;
 }
@@ -1129,8 +1189,8 @@ function ensureStarMesh(resolved) {
   if (resolved.kind !== 'star' || resolved.key === 'sun') return;
   if (starMeshes.has(resolved.key)) return starMeshes.get(resolved.key);
   if (exoSystem?.key === resolved.key) return exoSystem.star;
-  const { colour, intensity } = starProfile(resolved.dest);
-  const star = new Star({ radiusKm: resolved.radius, colour, intensity });
+  const { colour, intensity, look } = starProfile(resolved.dest);
+  const star = new Star({ radiusKm: resolved.radius, colour, intensity, look });
   star.group.name = resolved.key;
   extras.add(star.group);
   starMeshes.set(resolved.key, star);
@@ -1750,34 +1810,104 @@ const tmpShipUp = new Vector3();
 const tmpBodyInverse = new Quaternion();
 
 /**
- * Keeps the ship above the ground. The speed limit already slows it to a
- * crawl near a surface, but a crawl held for long enough still goes through,
- * so this is the floor: the measured terrain under the ship where the body
- * has an elevation map, a little above the sphere where it does not.
+ * The ground under the camera, or under the ship when there is one, measured
+ * off the terrain as it is drawn.
+ *
+ * Without this the only floor was the reference sphere: zooming all the way in
+ * stopped at radius x 1.000001, which is under every hill, crater rim and
+ * octave of procedural relief, and from under the ground the terrain is all
+ * back faces and only the skirts along its patch edges show, as a grid. The
+ * measured map alone is not enough either, since the shader displaces the
+ * ground further. So the height is read back from the terrain shader itself,
+ * a few times a second and when the point has moved, and only close in, where
+ * the relief can matter.
  */
-function keepShipAboveGround() {
-  if (!ship.active || !roamNearest.position) return;
-  const shipWorld = ship.worldPosition(controls, tmpShipWorld);
-  const up = tmpShipUp.copy(shipWorld).sub(roamNearest.position);
-  const distance = up.length();
-  if (!(distance > 0)) return;
-  up.multiplyScalar(1 / distance);
-  const body = universe.get(roamNearest.key);
-  let groundKm = null;
-  if (body?.orientation) {
-    const local = tmpShipWorld.copy(up).applyQuaternion(tmpBodyInverse.copy(body.orientation).invert());
-    groundKm = demGroundKm(roamNearest.key, local);
+const cameraGround = { key: null, km: 0, at: 0, dir: new Vector3(), altitudeKm: Infinity };
+const groundProbeDirs = [new Vector3()];
+const GROUND_CLEARANCE_KM = 0.004;
+const SHIP_CLEARANCE_KM = 0.03;
+
+function surfaceOf(key) {
+  if (!key) return null;
+  const planet = planets.get(key);
+  if (planet) {
+    const body = universe.get(key);
+    return body ? { planet, position: body.position, orientation: body.orientation, radius: planet.radius } : null;
   }
-  const floor = roamNearest.radius + (groundKm ?? roamNearest.radius * 0.002) + 0.03;
-  if (distance >= floor) return;
-  const push = floor - distance;
+  const exo = exoSystem?.get(key);
+  if (exo?.planet) return { planet: exo.planet, position: exo.position, orientation: exo.orientation, radius: exo.spec.radiusKm };
+  return null;
+}
+
+/** Height of the drawn ground under `point`, in km above the body's sphere, or null. */
+function groundUnder(key, point, now) {
+  const surface = surfaceOf(key);
+  if (!surface) return null;
+  const up = tmpShipUp.copy(point).sub(surface.position);
+  const distance = up.length();
+  if (!(distance > 0) || distance > surface.radius * 1.25) return null;
+  up.multiplyScalar(1 / distance);
+  const local = groundProbeDirs[0].copy(up).applyQuaternion(tmpBodyInverse.copy(surface.orientation).invert());
+  const altitude = distance - surface.radius - cameraGround.km;
+  const stale = cameraGround.key !== key
+    || now - cameraGround.at > 120
+    || cameraGround.dir.angleTo(local) * surface.radius > Math.max(altitude * 0.05, 0.001);
+  if (stale && surface.planet.group.visible) {
+    const uniforms = surface.planet.material.uniforms;
+    let km = surface.planet.groundHeightsKm(renderer, groundProbeDirs)[0];
+    if (!Number.isFinite(km) || Math.abs(km) > surface.radius * 0.25) km = demGroundKm(key, local) ?? 0;
+    // The height function is the seabed; the water drawn over it is the floor.
+    if (uniforms.uHasOcean?.value > 0 || surface.planet.spec?.oceanFraction > 0) {
+      km = Math.max(km, uniforms.uSeaLevelKm?.value ?? 0);
+    }
+    cameraGround.key = key;
+    cameraGround.km = km;
+    cameraGround.at = now;
+    cameraGround.dir.copy(local);
+  }
+  if (cameraGround.key !== key) return null;
+  return { up, distance, radius: surface.radius, groundKm: cameraGround.km };
+}
+
+/**
+ * Orbit and free flight keep their distance from the target as a ratio, so
+ * their floor is a ratio too, set before the controls move. Roaming and the
+ * ship are pushed back out afterwards instead, since their position is not
+ * held as a distance from anything that has a surface.
+ */
+function floorBeforeControls(resolved, now) {
+  cameraGround.altitudeKm = Infinity;
+  controls.minDistanceRadii = 1.000001;
+  if (controls.mode === 'roam' || state.viewFromEarth || state.riding || !resolved) return;
+  const ground = groundUnder(resolved.key, controls.worldPosition, now);
+  if (!ground) return;
+  const radius = resolved.radius;
+  const floor = (radius + ground.groundKm + GROUND_CLEARANCE_KM) / radius;
+  controls.minDistanceRadii = Math.max(1.000001, floor);
+  if (controls.distanceRadii < controls.minDistanceRadii) controls.distanceRadii = controls.minDistanceRadii;
+  cameraGround.altitudeKm = ground.distance - radius - ground.groundKm;
+}
+
+function floorAfterControls(now) {
+  if (controls.mode !== 'roam' || !roamNearest.key) return;
+  const point = ship.active ? ship.worldPosition(controls, tmpShipWorld) : tmpShipWorld.copy(controls.worldPosition);
+  const ground = groundUnder(roamNearest.key, point, now);
+  if (!ground) return;
+  const floor = ground.radius + ground.groundKm + (ship.active ? SHIP_CLEARANCE_KM : GROUND_CLEARANCE_KM);
+  cameraGround.altitudeKm = ground.distance - ground.radius - ground.groundKm;
+  if (ground.distance >= floor) return;
+  const push = floor - ground.distance;
+  const up = ground.up;
   controls.roamOffset.addScaledVector(up, push);
   controls.originOffset.addScaledVector(up, push);
   controls.worldPosition.addScaledVector(up, push);
-  // Whatever was carrying the ship into the ground stops; sliding along it is fine.
-  const into = ship.velocity.dot(up);
-  if (into < 0) ship.velocity.addScaledVector(up, -into);
-  ship.speed = Math.min(ship.speed, ship.velocity.length());
+  cameraGround.altitudeKm += push;
+  if (ship.active) {
+    // Whatever was carrying the ship into the ground stops; sliding along it is fine.
+    const into = ship.velocity.dot(up);
+    if (into < 0) ship.velocity.addScaledVector(up, -into);
+    ship.speed = Math.min(ship.speed, ship.velocity.length());
+  }
 }
 
 function updateRoamFrame() {
@@ -2377,6 +2507,7 @@ function frame(now) {
     : null;
 
   updateRoamFrame();
+  floorBeforeControls(resolved, now);
 
   const earth = universe.get('earth');
   controls.update(
@@ -2403,7 +2534,7 @@ function frame(now) {
       : null,
   );
 
-  keepShipAboveGround();
+  floorAfterControls(now);
   const cam = controls.worldPosition;
   updateCameraFrame();
   // Anything that took the camera out of roam — a flight, a mode button — has
@@ -2417,7 +2548,7 @@ function frame(now) {
   ship.spaceKm = neighbourhood.spaceKm;
   const range = state.viewFromEarth
     ? 0.02
-    : Math.max(controls.altitudeKm, targetRadius * 0.001, 0.0005);
+    : Math.max(Math.min(controls.altitudeKm, cameraGround.altitudeKm), 0.0005);
   // From onboard, the nearest thing is the craft's own structure a few metres
   // away, so the near plane has to come off the craft rather than off the
   // distance to a planet that may be an astronomical unit off.
@@ -2487,6 +2618,7 @@ function frame(now) {
 
     const distance = cameraLocalIn(bodyState.position, key, tmpCameraLocal).length();
     const apparentPixels = (planet.radius / distance) * pixelsPerRadian * 2;
+    considerRelease(key, apparentPixels);
     const isParent = key === parentKey;
     const hideEarth = state.viewFromEarth && key === 'earth';
     const visible = !hideEarth && (apparentPixels > 0.35 || key === state.target || isParent);
@@ -2817,6 +2949,7 @@ function frame(now) {
   cosmos.update({
     cameraWorld: cam,
     pixelRatio: renderer.getPixelRatio(),
+    pxPerRad: renderer.domElement.height / (2 * Math.tan((camera.fov * Math.PI) / 360)),
     sunDistanceKm: fromSun,
     cameraDistanceToSunKm: fromSun,
   });

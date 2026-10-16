@@ -271,7 +271,44 @@ export class BodyTextures {
       const texture = this.cache.get(`${body}/${kind}/${width}`);
       if (texture) resident = { texture, info: this.entry(body, kind, String(width)) };
     }
+    // Levels well past what is wanted are not drawn any more. Twice the target
+    // is kept so hovering at a boundary does not fetch the same file over and over.
+    if (resident) this.trimLevels(body, kind, Math.max(target * 2, levels[0]));
     return resident;
+  }
+
+  /** Frees width levels of a kind finer than `keepWidth`. */
+  trimLevels(body, kind, keepWidth) {
+    for (const width of this.levels(body, kind)) {
+      if (width <= keepWidth) continue;
+      const key = `${body}/${kind}/${width}`;
+      const texture = this.cache.get(key);
+      if (!texture) continue;
+      texture.dispose();
+      this.cache.delete(key);
+    }
+  }
+
+  /**
+   * Frees a body's large tier wherever it has a small one to fall back on.
+   * An 8192 map is about 170 MB on the GPU with its mipmaps, and holding every
+   * one ever visited is what used to take the page down after a tour of the
+   * moons. Kinds that only come in one size are kept, being all there is.
+   */
+  releaseNear(body) {
+    for (const kind of Object.keys(this.manifest?.[body] ?? {})) {
+      if (!this.entry(body, kind, 'far')) continue;
+      const key = `${body}/${kind}/near`;
+      const texture = this.cache.get(key);
+      if (!texture) continue;
+      texture.dispose();
+      this.cache.delete(key);
+    }
+  }
+
+  /** The small tier of a kind, if resident. */
+  far(body, kind) {
+    return this.cache.get(`${body}/${kind}/far`) ?? null;
   }
 
   demLevels(body) {

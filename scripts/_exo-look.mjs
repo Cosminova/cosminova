@@ -8,7 +8,7 @@
  * as surface. The two have different causes and different fixes, so they are
  * measured separately.
  *
- * Usage: node scripts/_exo-look.mjs [url]
+ * Usage: node scripts/_exo-look.mjs [url] [key,key,...]
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -24,7 +24,7 @@ const H = 720;
 
 // A hot giant close in, a temperate rocky world, and a cool one, so the
 // comparison spans the range rather than one complaint.
-const TARGETS = [
+const TARGETS = process.argv[3]?.split(',').map((k) => (k.startsWith('exo:') ? k : `exo:${k}`)) ?? [
   'exo:toi-150-01',
   'exo:trappist-1-e',
   'exo:proxima-cen-b',

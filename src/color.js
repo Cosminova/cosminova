@@ -68,9 +68,9 @@ export function colorIndexToLinearRgb(bv, saturation = 1) {
   b /= mean;
 
   if (saturation !== 1) {
-    r = 1 + (r - 1) * saturation;
-    g = 1 + (g - 1) * saturation;
-    b = 1 + (b - 1) * saturation;
+    r = Math.max(0.02, 1 + (r - 1) * saturation);
+    g = Math.max(0.02, 1 + (g - 1) * saturation);
+    b = Math.max(0.02, 1 + (b - 1) * saturation);
   }
   return [r, g, b];
 }

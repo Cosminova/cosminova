@@ -1,3 +1,5 @@
+import { colorIndexToLinearRgb } from '../color.js';
+
 /**
  * How big a star is, and what colour, worked out from the catalogue.
  *
@@ -167,15 +169,60 @@ export function describeStar({ lum, spect, colorIndex }) {
  * unusable: Rigel would be thirteen times the Sun and clip to white over its
  * whole disc, losing the limb darkening and granulation that make it read as a
  * sphere, while Betelgeuse would come out at a seventh and read as brown. The
- * square root of the ratio keeps the ordering and the hue — hot stars brighter
- * and blue, cool stars dimmer and orange — inside a range the tone mapping can
- * still show structure across.
+ * square root of the ratio keeps the ordering for cool stars, and hot ones
+ * stop below the Sun, whose own disc is already at the edge: any brighter and the disc clips to white
+ * whatever its tint, so a B star looks exactly like an A star. Their extra
+ * light is in the corona and the point glare instead.
  */
 export function surfaceBrightness(teff) {
-  const ratio = (teff / SOLAR_TEFF) ** 2;
-  // The floor was high enough to put a red supergiant's disc over the clipping
-  // point once the caller had scaled it, which threw the hue away again: the
-  // whole disc came out cream. Cool stars need room below one, not a floor
-  // holding them up against it.
-  return Math.max(0.22, Math.min(3.2, ratio));
+  return Math.max(0.22, Math.min(1, (teff / SOLAR_TEFF) ** 2)) * (teff > 7000 ? 0.75 : 1);
+}
+
+/**
+ * The colour to draw a star's disc, linear RGB around a mean of one.
+ *
+ * Saturated past the blackbody chromaticity on purpose, and more so the
+ * cooler the star: the tone curve compresses the brightest channel hardest,
+ * so a 3000 K disc whose red is twice its green comes out amber, not the
+ * orange-red that a red dwarf is drawn as everywhere from SpaceEngine to
+ * every textbook figure. Measured with scripts/_star-faces.mjs.
+ */
+export function starTint(teff) {
+  const bv = Math.max(-0.33, Math.min(2.0, 5601 / teff - 0.47));
+  const cool = Math.min(1, Math.max(0, (4600 - teff) / 1800));
+  const hot = Math.min(1, Math.max(0, (teff - 8000) / 8000));
+  return colorIndexToLinearRgb(bv, 2.2 + 1.3 * cool + 0.6 * hot);
+}
+
+/**
+ * What a star's photosphere looks like, from its temperature and size, for the
+ * Star renderer: the things that make an M dwarf, the Sun, a blue giant and a
+ * red supergiant different objects rather than one ball in four tints.
+ *
+ * - Convection cells scale with the pressure scale height, which grows as
+ *   surface gravity falls: a dwarf is covered in millions of fine granules, a
+ *   red supergiant like Betelgeuse in a handful of cells each larger than the
+ *   Sun. Hot stars above about 8000 K have radiative envelopes and almost no
+ *   granulation at all.
+ * - Spots come with deep convection and fast rotation: M dwarfs are heavily
+ *   spotted, the Sun lightly, hot stars not at all.
+ * - Limb darkening is strongest in cool atmospheres and weakest in hot ones;
+ *   quadratic-law coefficients follow Claret's visual-band tables loosely.
+ *
+ * @param {number} teff kelvin
+ * @param {number} radiusSol
+ * @param {number} [seed] per-star variety in spot pattern
+ */
+export function starLook(teff, radiusSol = 1, seed = 0) {
+  const t = Math.max(2200, Math.min(teff, 50000));
+  const gravity = Math.log10(Math.max(radiusSol, 0.05));
+  const convective = 1 - Math.min(1, Math.max(0, (t - 6800) / 2200));
+  const cool = Math.min(1, Math.max(0, (5200 - t) / 2200));
+  return {
+    granScale: Math.max(6, 420 / 10 ** (Math.max(gravity, 0) * 0.85)),
+    granContrast: 0.15 + 0.31 * convective + 0.1 * cool * Math.min(1, Math.max(gravity, 0)),
+    spots: Math.min(0.85, (0.12 + 0.6 * cool) * convective * (gravity > 1.5 ? 0.4 : 1)),
+    limb: [0.3 + 0.45 * cool + 0.02 * convective, 0.12 + 0.11 * convective],
+    seed: (seed % 997) / 97,
+  };
 }

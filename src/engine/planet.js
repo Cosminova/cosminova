@@ -680,7 +680,9 @@ const FRAGMENT = /* glsl */ `
   uniform float uSpecular;
   uniform float uPixelsPerRadian;
   uniform float uPolarSmooth;
-  uniform float uBanding;         // 0 for a solid surface, 1 for zonal cloud
+  uniform float uBanding;         // 0 for a solid surface; otherwise zonal cloud, at this belt scale
+  uniform float uHeatGlow;        // thermal emission of a world hot enough to glow
+  uniform vec3 uHeatColour;
   uniform float uMacroRelief;
   uniform float uIrregular;
   uniform vec3 uAxisScale;
@@ -795,8 +797,9 @@ const FRAGMENT = /* glsl */ `
 
     // Sampled along the axis only, so each parallel is one colour. Two scales
     // give broad belts with narrower ones inside them.
-    float wide = fbmd(vec3(0.0, zone * 3.6, 0.0) + uSurfaceSeed, 3, 2.0, 0.5).x;
-    float fine = fbmd(vec3(0.0, zone * 12.0, 0.0) + uSurfaceSeed * 1.7, 2, 2.0, 0.5).x;
+    // uBanding scales the belts too: a fast rotator has more, narrower jets.
+    float wide = fbmd(vec3(0.0, zone * 3.6 * uBanding, 0.0) + uSurfaceSeed, 3, 2.0, 0.5).x;
+    float fine = fbmd(vec3(0.0, zone * 12.0 * uBanding, 0.0) + uSurfaceSeed * 1.7, 2, 2.0, 0.5).x;
     float belt = clamp(0.5 + 0.60 * wide + 0.24 * fine, 0.0, 1.0);
 
     vec3 colour = mix(uPaletteA, uPaletteB, smoothstep(0.30, 0.70, belt));
@@ -1104,9 +1107,20 @@ const FRAGMENT = /* glsl */ `
       // out east-west the way rotation actually shears weather, instead of as
       // isotropic blobs.
       vec3 q = look * uCloudFreq * vec3(1.0, 2.4, 1.0) + uCloudSeed;
-      float f = fbmd(q, 5, 2.17, 0.52).x * 0.5 + 0.5;
+      // Warped by a broader field, so systems curl into fronts and cyclones
+      // instead of sitting as isolated round flecks.
+      vec3 warp = vec3(
+        fbmd(q * 0.45 + 3.1, 3, 2.1, 0.5).x,
+        fbmd(q * 0.45 + 7.7, 3, 2.1, 0.5).x,
+        fbmd(q * 0.45 + 12.9, 3, 2.1, 0.5).x
+      );
+      q += warp * 1.1;
+      // Few octaves for the systems themselves, so the threshold below cuts
+      // whole weather systems rather than the peaks of fine noise, which came
+      // out as scattered flecks; the finer field only frays their edges.
+      float f = fbmd(q, 3, 2.1, 0.5).x * 0.5 + 0.5;
       float wisp = fbmd(q * 3.7 + 41.0, 3, 2.4, 0.5).x * 0.5 + 0.5;
-      float deck = clamp(f * 0.78 + wisp * 0.22, 0.0, 1.0);
+      float deck = clamp(f * 0.86 + wisp * 0.14, 0.0, 1.0);
       // Detail added on approach, at the rate the deck's own cells outgrow a
       // pixel. Without it the field keeps the size it had from orbit and low
       // altitude flies under a single smear that covers the sky; with it, the
@@ -1127,7 +1141,14 @@ const FRAGMENT = /* glsl */ `
       float cover = smoothstep(edge, edge + 0.21, deck);
       // Clouds thin out at the poles and pile up along the tropics, which is the
       // banding that stops a planet from looking speckled.
-      cover *= 0.55 + 0.45 * (1.0 - abs(dir.y));
+      // Where the circulation puts it: the rising air of the tropics and the
+      // storm tracks of the mid-latitudes are cloudy, the subtropical deserts
+      // in between are clear. That banding is what stops a planet from looking
+      // speckled.
+      float lat = abs(dir.y);
+      float belts = 0.5 + 0.5 * exp(-pow(lat / 0.16, 2.0)) + 0.45 * exp(-pow((lat - 0.78) / 0.16, 2.0))
+        - 0.35 * exp(-pow((lat - 0.45) / 0.12, 2.0));
+      cover *= clamp(belts, 0.15, 1.0);
       if (cover > 0.002) {
         float shade = max(dot(dir, uSunDir), 0.0);
         vec3 cloudLit = uCloudTint * uSunColour * uSunIntensity
@@ -1140,6 +1161,25 @@ const FRAGMENT = /* glsl */ `
       // City lights, strongest where the sun is well below the horizon.
       float night = 1.0 - smoothstep(-0.12, 0.10, mu0);
       colour += texture2D(uNightMap, uv).rgb * night * 0.9;
+    }
+
+    // Thermal emission. A rocky world past a thousand kelvin glows from cracks
+    // in its crust and from open magma seas; a giant that hot glows from its
+    // whole night side, the dayside heat carried round by its winds. Scaled by
+    // the exposure like sunlight, so it holds against the day side.
+    if (uHeatGlow > 0.001) {
+      float dark = 1.0 - smoothstep(-0.15, 0.25, mu0);
+      float heat;
+      if (uBanding > 0.001) {
+        float flow = fbmd(vec3(dir.x, dir.y * 4.0, dir.z) * 3.0 + uSurfaceSeed, 4, 2.1, 0.5).x;
+        heat = (0.65 + 0.35 * flow) * mix(0.25, 1.0, dark);
+      } else {
+        vec3 hp = dir * uPaletteFreq * 2.2 + uSurfaceSeed * 1.3;
+        float vein = 1.0 - smoothstep(0.0, 0.05, abs(fbmd(hp, 4, 2.2, 0.5).x));
+        float pool = smoothstep(0.18, 0.42, fbmd(hp * 0.35 + 21.0, 3, 2.1, 0.5).x);
+        heat = (vein * 0.7 + pool) * mix(0.35, 1.0, dark);
+      }
+      colour += uHeatColour * uHeatGlow * heat * uSunIntensity * 0.6;
     }
 
     if (uAtmosphereDensity > 0.0) {
@@ -1641,6 +1681,8 @@ export class Planet {
         uSpecular: { value: spec.specular ?? 0 },
         uPolarSmooth: { value: spec.polarSmooth ?? 0 },
         uBanding: { value: spec.banding ?? 0 },
+        uHeatGlow: { value: spec.heatGlow ?? 0 },
+        uHeatColour: { value: new Color(...(spec.heatColour ?? [1, 0.35, 0.1])) },
         // Ridged noise over the whole body, which is the crude stand-in for
         // regional relief that the crust field replaces. A body with real geology
         // does not get both: the ridged term is a few thousandths of the radius

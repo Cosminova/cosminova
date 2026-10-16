@@ -209,22 +209,31 @@ export const GALAXY_FRAGMENT = /* glsl */ `
     float bulge = exp(-pow(r * 8.5, 0.9));
     float disc = exp(-r * 2.15) * (0.48 + 0.52 * n);
 
+    // Logarithmic arms, as real ones are, with the dust lane that runs along
+    // each arm's inner edge, where gas is shocked and piles up before it forms
+    // the stars that light the arm a little further out.
     float arms = 0.0;
-    float pitch = mix(6.5, 11.5, smoothstep(2.0, 3.5, vMorph));
+    float lanes = 0.0;
+    float pitch = mix(2.6, 4.6, smoothstep(2.0, 3.5, vMorph));
+    float lr = log(max(r, 0.02));
     for (int k = 0; k < 2; k++) {
-      float a = ang + float(k) * 3.14159265 + r * pitch + vSeed * 6.2831853;
+      float a = ang + float(k) * 3.14159265 + lr * pitch + vSeed * 6.2831853;
       float ridge = exp(-pow(sin(a), 2.0) * mix(14.0, 9.0, smoothstep(2.0, 3.5, vMorph)));
-      arms += ridge * exp(-r * 1.55);
+      arms += ridge * exp(-r * 1.55) * smoothstep(0.04, 0.16, r);
+      lanes += exp(-pow(sin(a - 0.3), 2.0) * 38.0) * exp(-r * 1.2) * smoothstep(0.06, 0.2, r);
     }
     arms *= spiral * (1.0 - edgeOn * 0.85);
+    lanes *= spiral * (1.0 - edgeOn);
     disc *= mix(1.0, 0.38 + 0.9 * arms, spiral * (1.0 - edgeOn));
 
     float bar = exp(-p.y * p.y * 55.0) * exp(-p.x * p.x * 3.2)
       * (1.0 - smoothstep(0.32, 0.55, r)) * barred * (1.0 - edgeOn);
 
     float dustLane = exp(-pow(q.y * mix(8.0, 42.0, edgeOn), 2.0)) * exp(-r * 1.4);
-    float dust = dustLane * mix(0.18, 0.72, edgeOn) + arms * 0.22 * (1.0 - edgeOn);
+    float dust = dustLane * mix(0.18, 0.72, edgeOn) * (1.0 - elliptical) + lanes * 0.75;
     float clumps = pow(n, 3.0) * disc * mix(0.15, 1.4, irregular);
+    // Star-forming knots strung along the arms, pink with hydrogen.
+    float knots = pow(noise(p * 34.0 + vSeed * 13.0), 7.0) * (arms * 1.6 + irregular * disc);
 
     vec3 bulgeCol = vec3(1.00, 0.76, 0.48);
     vec3 discCol = mix(vec3(0.55, 0.52, 0.45), vec3(0.38, 0.55, 0.82), spiral);
@@ -238,22 +247,10 @@ export const GALAXY_FRAGMENT = /* glsl */ `
     colour += armCol * arms * 0.1;
     colour += bulgeCol * bar * 0.1;
     colour += hii * clumps * 0.05;
-    colour *= 1.0 - dust * 0.55;
+    colour += hii * knots * 0.5;
+    // Dust reddens what it does not hide.
+    colour *= vec3(1.0) - min(dust, 1.0) * vec3(0.48, 0.58, 0.66);
     colour *= vColor * vLum;
-
-    // Invented field stars, in cells sized to stay a pixel or two wide however
-    // close the disc is. A fixed 260 cells across the quad grew with it: from
-    // inside a galaxy, with the billboard covering the sky, every lit cell was
-    // a hard white slab a dozen pixels across, all tilted to the disc's
-    // position angle. That is the field of white marks reported around the
-    // Magellanic Clouds, and it is the same grid at every distance.
-    float cells = clamp(vPx * 0.31, 80.0, 5000.0);
-    float speckle = hash21(floor(p * cells) + vSeed * 17.0);
-    // Nearer still, the host-star particle layer draws this galaxy's stars for
-    // real, so the painted ones bow out instead of competing with them.
-    float painted = 1.0 - smoothstep(900.0, 2600.0, vPx);
-    float fieldStars = step(0.987, speckle) * pow(speckle, 6.0) * exp(-r * 1.15) * painted;
-    colour += vec3(0.92, 0.94, 1.0) * fieldStars * mix(0.35, 0.9, spiral);
 
     float edge = 1.0 - smoothstep(0.86, 1.0, r);
     colour *= edge * vFade;
@@ -847,21 +844,17 @@ export class DeepField {
 
   /**
    * Scale one catalogue galaxy's painted disc, so the procedural universe can
-   * fade it out while its own stars take over from inside it.
+   * fade it out while its sprite cloud takes over. Each galaxy keeps its own
+   * factor until it is set back to 1.
    */
   setGalaxyDim(index, factor) {
     const attr = this.galaxyParamsAttr;
     if (!attr || index < 0 || index >= this.galaxies.count) return;
-    if (this._dimmed !== undefined && this._dimmed !== index) {
-      attr.array[this._dimmed * 3 + 2] = this.galaxyBaseLum[this._dimmed];
-      attr.needsUpdate = true;
-    }
     const value = this.galaxyBaseLum[index] * factor;
     if (attr.array[index * 3 + 2] !== value) {
       attr.array[index * 3 + 2] = value;
       attr.needsUpdate = true;
     }
-    this._dimmed = index;
   }
 
   galaxyAt(index) {

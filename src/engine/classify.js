@@ -333,38 +333,104 @@ function rockPalette({ bulk, temperatureK, volatiles, oceanLevel }, random) {
   };
 }
 
-/** Cloud-top and haze colours for the gas families, biased by temperature. */
-function giantPalette(temperatureK, random) {
-  // Cold giants are pale blue-white ammonia; the belts turn brown then red as
-  // they warm, and the hottest are dark with sodium and silicate cloud.
-  const cold = [0.62, 0.72, 0.82];
-  const cool = [0.85, 0.82, 0.72];
-  const warm = [0.78, 0.6, 0.42];
-  const hot = [0.35, 0.18, 0.14];
-  let base;
-  if (temperatureK < 120) base = cold;
-  else if (temperatureK < 300) base = mixColour(cold, cool, (temperatureK - 120) / 180);
-  else if (temperatureK < 800) base = mixColour(cool, warm, (temperatureK - 300) / 500);
-  else base = mixColour(warm, hot, Math.min((temperatureK - 800) / 700, 1));
+/**
+ * Cloud-top colours for the gas families, by Sudarsky's classes: which
+ * condensate forms the visible deck is set by temperature, and each one is a
+ * different-looking planet.
+ *
+ *   I    below ~150 K, ammonia ice over hydrocarbon haze: Jupiter's creams and browns
+ *   II   to ~350 K, water cloud: bright and nearly white
+ *   III  to ~850 K, too warm for cloud at all: a clear deep atmosphere, azure
+ *   IV   to ~1400 K, alkali metals absorb the red, silicate haze above: dark blue,
+ *        as HD 189733 b is measured to be
+ *   V    hotter, silicate and iron cloud high up: dark grey-brown, and past
+ *        2000 K the night side glows
+ *
+ * Ice giants follow methane rather than ammonia, so the cold ones are the
+ * cyan of Uranus and the blue of Neptune. Every planet then gets its own hue,
+ * saturation and band contrast, since giants of one class are no more alike
+ * than Jupiter and Saturn are.
+ */
+const JOVIAN = [
+  [60, [0.86, 0.8, 0.66]],
+  [150, [0.84, 0.7, 0.52]],
+  [260, [0.9, 0.88, 0.84]],
+  [380, [0.78, 0.84, 0.9]],
+  [600, [0.36, 0.55, 0.88]],
+  [900, [0.26, 0.4, 0.78]],
+  [1250, [0.17, 0.25, 0.52]],
+  [1600, [0.3, 0.24, 0.24]],
+  [2200, [0.42, 0.22, 0.14]],
+  [3000, [0.5, 0.2, 0.1]],
+];
+const ICE_GIANT = [
+  [50, [0.6, 0.82, 0.88]],
+  [90, [0.48, 0.72, 0.9]],
+  [180, [0.32, 0.5, 0.88]],
+  [350, [0.68, 0.76, 0.84]],
+  [700, [0.44, 0.58, 0.8]],
+  [1100, [0.26, 0.32, 0.5]],
+  [1600, [0.34, 0.24, 0.22]],
+  [3000, [0.46, 0.22, 0.14]],
+];
 
-  const tint = 0.9 + random() * 0.2;
-  // The three the band renderer reads are `desert`, `lowland` and `beach`: the
-  // pale zone, the dark belt, and the accent for storms. They need real
-  // separation to be seen as banding at all — Jupiter's belts are about twice
-  // the depth of its zones — where the ten per cent spread these once had
-  // vanished the moment any shading was applied.
-  const zone = base.map((c) => Math.min(c * 1.16 * tint, 1));
-  const belt = base.map((c) => c * 0.55 * tint);
-  const accent = base.map((c, i) => Math.min(c * (i === 0 ? 1.3 : i === 1 ? 1.05 : 0.85) * tint, 1));
+function alongTemperature(table, t) {
+  if (t <= table[0][0]) return table[0][1];
+  for (let i = 1; i < table.length; i++) {
+    if (t <= table[i][0]) {
+      const [t0, c0] = table[i - 1];
+      const [t1, c1] = table[i];
+      return mixColour(c0, c1, (t - t0) / (t1 - t0));
+    }
+  }
+  return table[table.length - 1][1];
+}
+
+function giantPalette(temperatureK, random, bulk = 'jupiter') {
+  const raw = alongTemperature(bulk === 'neptune' ? ICE_GIANT : JOVIAN, temperatureK);
+  const base = shift(raw, {
+    hue: (random() - 0.5) * 0.09,
+    saturation: 0.75 + random() * 0.55,
+    value: 0.9 + random() * 0.2,
+  });
+  // Band depth varies more than anything else between real giants: Jupiter's
+  // belts are about twice the depth of its zones, Uranus is almost blank. A
+  // cloudless class III world and a hazy hot one have little banding to show.
+  const clear = temperatureK > 380 && temperatureK < 1500;
+  const contrast = (bulk === 'neptune' ? 0.12 + random() * 0.3 : 0.25 + random() * 0.4) * (clear ? 0.55 : 1);
+  const zone = base.map((c) => Math.min(c * (1 + contrast * 0.35), 1));
+  const belt = base.map((c) => c * (1 - contrast));
+  // Storms: red ovals on a cool jovian, white methane or water cloud on the
+  // cold ones; a hot giant has no white condensate, only lighter eddies.
+  let accent;
+  if (temperatureK < 200 && bulk !== 'neptune') accent = mixColour(base, [0.75, 0.38, 0.24], 0.6);
+  else if (temperatureK < 380) accent = mixColour(base, [0.95, 0.96, 0.98], 0.5);
+  else accent = base.map((c) => Math.min(c * 1.12, 1));
   return {
-    sea: base.map((c) => c * 0.55 * tint),
-    shelf: base.map((c) => c * 0.65 * tint),
+    sea: base.map((c) => c * 0.55),
+    shelf: base.map((c) => c * 0.65),
     beach: accent,
     desert: zone,
     lowland: belt,
-    upland: base.map((c) => c * 1.0 * tint),
-    rock: base.map((c) => c * 1.1 * tint),
-    snow: base.map((c) => Math.min(c * 1.3 * tint, 1)),
+    upland: base,
+    rock: base.map((c) => c * 1.1),
+    snow: base.map((c) => Math.min(c * 1.3, 1)),
+  };
+}
+
+/**
+ * How brightly a world glows in its own heat, and what colour. Rock starts
+ * to glow dull red near a thousand kelvin and is orange by two thousand; a
+ * giant's cloud deck hides the deep heat until it is hotter still.
+ */
+function heatOf(temperatureK, gaseous) {
+  const onset = gaseous ? 1500 : 950;
+  const full = gaseous ? 2600 : 2000;
+  const glow = clamp01((temperatureK - onset) / (full - onset));
+  const t = clamp01((temperatureK - 900) / 1800);
+  return {
+    heatGlow: glow * glow * (gaseous ? 0.9 : 1.6),
+    heatColour: mixColour([0.9, 0.12, 0.03], [1.0, 0.52, 0.16], t),
   };
 }
 
@@ -401,7 +467,7 @@ export function describePlanet(entry, { starTeff, aAu } = {}) {
   const oceanLevel =
     volatiles === 'oceanic' ? 0.62 : volatiles === 'marine' ? 0.42 : volatiles === 'lacustrine' ? 0.2 : 0;
   const palette = gaseous
-    ? giantPalette(temperatureK, random)
+    ? giantPalette(temperatureK, random, bulk)
     : rockPalette({ bulk, temperatureK, volatiles, oceanLevel }, random);
   // Ice reaches down from the poles once it is cold enough for water to freeze
   // on the surface, and covers the planet outright below the nitrogen line.
@@ -411,6 +477,10 @@ export function describePlanet(entry, { starTeff, aAu } = {}) {
   const label = [temperature, volatiles, `${prefix}${bulk}`].filter(Boolean).join(' ');
 
   return {
+    ...heatOf(temperatureK, gaseous),
+    // More, narrower belts on some giants than others, the way Saturn's
+    // differ from Jupiter's.
+    bandScale: gaseous ? 0.7 + random() * 0.9 : 0,
     label,
     temperature,
     volatiles,

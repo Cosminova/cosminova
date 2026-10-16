@@ -413,12 +413,39 @@ export class OrbitApproachControls {
         event.preventDefault();
         this._flight = null;
         this.cruise = 0;
+        // Chrome and Firefox report a trackpad pinch as a wheel with ctrlKey
+        // set, in small steps where a hundred is about one e-fold of scale.
+        // It is taken directly, like a two-finger pinch on glass, so the
+        // view follows the fingers and stops when they do.
+        if (event.ctrlKey) {
+          this.zoomBy(event.deltaY * 0.014);
+          return;
+        }
         const impulse = event.deltaY * this.zoomSpeed;
         this.zoomVelocity += impulse;
         this.zoomBy(impulse * 0.35);
       },
       { passive: false },
     );
+
+    // Safari, and the Mac app's web view, report a trackpad pinch as gesture
+    // events and send no wheel for it at all, so without these a pinch did
+    // nothing there. `scale` is cumulative from gesturestart.
+    let gestureScale = 1;
+    dom.addEventListener('gesturestart', (event) => {
+      event.preventDefault();
+      this._flight = null;
+      this.cruise = 0;
+      gestureScale = event.scale || 1;
+    });
+    dom.addEventListener('gesturechange', (event) => {
+      event.preventDefault();
+      // On glass the same pinch also arrives as two pointers, handled above.
+      const scale = event.scale || 1;
+      if (this._pointers.size < 2) this.zoomBy(-Math.log(scale / gestureScale) * 1.4);
+      gestureScale = scale;
+    });
+    dom.addEventListener('gestureend', (event) => event.preventDefault());
 
     window.addEventListener('keydown', (event) => {
       if (event.metaKey || event.ctrlKey || event.altKey) return;

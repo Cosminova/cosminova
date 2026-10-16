@@ -1,9 +1,9 @@
 import { Quaternion, Vector3 } from 'three';
-import { describePlanet } from './classify.js';
+import { describePlanet, hashName } from './classify.js';
+import { starLook, starTint, surfaceBrightness } from './stellar.js';
 import { proceduralCraft } from './craft-missions.js';
 import { Planet } from './planet.js';
 import { Star } from './star.js';
-import { colorIndexToLinearRgb } from '../color.js';
 import { AU_KM, equatorialToEcliptic, SOLAR_RADIUS_KM } from './units.js';
 import { equatorialToVector } from '../astro.js';
 
@@ -77,7 +77,9 @@ function specFromPlanet(entry, described, hostKey) {
     palette,
     // Zonal cloud instead of continents. Without it a giant is drawn with the
     // blotchy field meant for rock and reads as a mottled ball.
-    banding: gaseous ? 1 : 0,
+    banding: gaseous ? described.bandScale || 1 : 0,
+    heatGlow: described.heatGlow,
+    heatColour: described.heatColour,
     polarSmooth: gaseous ? 1 : 0,
     seaLevelKm,
     oceanFraction,
@@ -90,7 +92,7 @@ function specFromPlanet(entry, described, hostKey) {
     cloudCover: gaseous ? 0 : described.cloudCover,
     // Storm cells, not continents: a handful of cycles over the whole sphere
     // gives half a dozen blobs and reads as marbling rather than weather.
-    cloudFreq: 5.5 + described.provinceScale + (described.radiusEarth > 2 ? 2.5 : 0),
+    cloudFreq: 2.6 + described.provinceScale * 0.6 + (described.radiusEarth > 2 ? 1.2 : 0),
     maxPatches: 1200,
     maxLevel: 13,
     pixelsPerQuad: 6,
@@ -167,7 +169,11 @@ export class ExoSystem {
     this.key = `star:${system.host}`;
     this.position = hostPosition(system);
     const teff = system.teff ?? 5500;
-    const colour = colorIndexToLinearRgb(teffToBv(teff), 0.9);
+    // Saturated past the true chromaticity and kept under the clipping point,
+    // as for catalogue stars in space.js: a disc drawn at full brightness is
+    // tone mapped to white whatever colour it was, which is why every host
+    // star used to look the same.
+    const colour = starTint(teff);
     // Stefan-Boltzmann, in solar units, so a planet's irradiance can be quoted
     // in Earth-equivalents: an M dwarf's habitable zone sits far closer in than
     // a Sun's, and lighting the planets as if every host were the Sun blows
@@ -176,7 +182,8 @@ export class ExoSystem {
     this.star = new Star({
       radiusKm: (system.radiusSol || 1) * SOLAR_RADIUS_KM,
       colour,
-      intensity: 2.6,
+      intensity: 0.95 * surfaceBrightness(teff),
+      look: starLook(teff, system.radiusSol || 1, hashName(system.host ?? '')),
     });
     this.star.group.name = this.key;
 
@@ -259,12 +266,12 @@ export class ExoSystem {
     }
     for (const item of this.planets) {
       if (item.spec.key === key && item.world) {
-        return { key, position: item.world, orientation: item.planet.spin.quaternion, spec: item.spec };
+        return { key, position: item.world, orientation: item.planet.spin.quaternion, spec: item.spec, planet: item.planet };
       }
     }
     for (const moon of this.moons) {
       if (moon.spec.key === key && moon.world) {
-        return { key, position: moon.world, orientation: moon.planet.spin.quaternion, spec: moon.spec };
+        return { key, position: moon.world, orientation: moon.planet.spin.quaternion, spec: moon.spec, planet: moon.planet };
       }
     }
     return undefined;
