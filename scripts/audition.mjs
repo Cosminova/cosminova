@@ -14,7 +14,7 @@
  *
  * Usage: node scripts/audition.mjs [scene ...]
  *        node scripts/audition.mjs --seconds 60
- *        node scripts/audition.mjs --beds     (accompaniment without the piano)
+ *        node scripts/audition.mjs --beds     (no piece, only the empty mix)
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -50,7 +50,7 @@ const boolean = (name) => {
 // asking how loud the background actually is under the melody.
 const BEDS_ONLY = boolean('beds');
 const TOUR = !BEDS_ONLY;
-const SECONDS = Number(value('seconds', 30));
+const SECONDS = Number(value('seconds', 45));
 
 // Each scene is the weight set sceneWeights would produce somewhere, named for
 // where that is. Kept explicit rather than derived so a scene can be auditioned
@@ -157,41 +157,15 @@ async function render(mix, seconds, tour) {
 
     const inner = ambient._internals;
     const failures = [];
+    let piece = null;
     if (tour) {
-      // Play the actual piano part, phrase by phrase, changing chord every two
-      // phrases the way the live scheduler does.
-      //
-      // This used to hand-place a few isolated notes, which measured a piano
-      // that does not exist: the real part is a left hand and a five-note motif
-      // per phrase, several times as many notes and several times the level.
-      // Phrases go down on a fixed grid with no rests, so what comes back is
-      // the busiest the score ever gets — the right case for a headroom check.
-      const PHRASE = 8 * 0.86;
-      const count = Math.max(Math.floor((seconds - 1) / PHRASE), 1);
-      for (let i = 0; i < count; i++) {
-        // Whatever happens in here, resume. A throw inside a suspend callback
-        // leaves the context suspended with nobody left to restart it, and
-        // `startRendering` then never settles — the render does not fail, it
-        // hangs, and the harness dies on a protocol timeout minutes later with
-        // nothing to say about why.
-        ctx.suspend(0.25 + i * PHRASE).then(() => {
-          try {
-            if (i > 0 && i % 2 === 0) inner.nextChord();
-            inner.renderPhrase(ctx.currentTime);
-            // Bells and shimmer are occasional colour over the piano; the harp
-            // is rare now, so one run every few phrases rather than every one.
-            if (i % 3 === 0) inner.strike('bell', 72, 0.018);
-            if (i % 2 === 0) inner.strike('shimmer', 84, 0.02);
-            if (i % 4 === 1) {
-              for (let k = 0; k < 4; k++) {
-                inner.strike('harp', 64 + [0, 4, 7, 11][k], 0.028 - k * 0.004);
-              }
-            }
-          } catch (err) {
-            failures.push(`phrase ${i}: ${err && err.message}`);
-          }
-          ctx.resume();
-        });
+      // The piece this place would choose, written in whole from the start.
+      // The measurement window begins after the intro, so it lands on the
+      // tune with the left hand under it — the busiest the score ever gets.
+      try {
+        piece = inner.renderPiece(null, 0.25);
+      } catch (err) {
+        failures.push(`render: ${err && err.message}`);
       }
     }
 
@@ -306,6 +280,7 @@ async function render(mix, seconds, tour) {
       length: buffer.length,
       rate,
       failures,
+      piece,
     };
   }, { mix, seconds, tour, bands: BANDS });
 }
@@ -403,7 +378,8 @@ for (const name of names) {
   const bandText = BANDS.map(([b]) => db(r.energy[b]).padStart(7)).join('');
   console.log(
     `${name.padEnd(12)} ${db(r.peak).padStart(6)} ${db(r.rms).padStart(6)} ` +
-    `${crest.toFixed(1).padStart(6)} ${r.width.toFixed(4).padStart(7)} ${bandText}`,
+    `${crest.toFixed(1).padStart(6)} ${r.width.toFixed(4).padStart(7)} ${bandText}` +
+    (r.piece ? `   ${r.piece.name} (${r.piece.mood}, ${r.piece.duration.toFixed(0)}s)` : ''),
   );
 
   writeWav(path.join(OUT, `${name}.wav`), r.samples, r.rate);
@@ -432,8 +408,10 @@ for (const name of names) {
   if (['wonder', 'approach', 'deep', 'alien'].includes(name) && rel('high') < -60) {
     fail(`no top end, ${rel('high').toFixed(0)} dB below level`);
   }
-  if (['void', 'leave', 'deep'].includes(name) && rel('sub') + rel('low') < -60) {
-    fail('no weight in the bottom octaves');
+  // A piano has next to nothing below 60 Hz, so the bottom is judged on the
+  // octave the left hand's bass notes actually occupy.
+  if (['void', 'leave', 'deep'].includes(name) && rel('low') < -30) {
+    fail('no weight in the low octave');
   }
   // Congestion: when almost everything sits in one low band and the midrange is
   // far beneath it, the chord is heard as mud rather than as harmony.

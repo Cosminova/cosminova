@@ -1,17 +1,18 @@
 /**
- * Original cinematic score for Cosminova. Every sound here is synthesised at
- * runtime — there are no samples and no audio files — and nothing is a loop.
- * Eight stems play continuously and crossfade with where the camera is, so the
- * piece has no downbeat, no loop point and no end; it only changes weather.
+ * Original score for Cosminova, synthesised at runtime — no samples and no
+ * audio files.
  *
- * Stems: home, leave, deep, approach, land, alien, void, wonder.
+ * The score is a set of short composed piano pieces with silence between them,
+ * in the manner of the music in Minecraft: a soft felt piano, a broken-chord
+ * left hand under the sustain pedal, a melody simple enough to remember, and
+ * then nothing for half a minute before the next one. The silence is not a
+ * gap in the score; it is most of what makes it calm. Music that never stops
+ * cannot be listened past, and this is meant to be listened past.
  *
- * The one thing that makes this work musically is the harmony clock below. Every
- * stem voices the *same* chord at the same time, each in its own register and
- * each gliding at its own speed. Without that, stems that are audible together —
- * which is most of them, most of the time, because the weights overlap on
- * purpose — drift into different chords and the crossfade turns to mud. With it,
- * any combination of stems is consonant, so the mix can move freely.
+ * Where the camera is chooses which piece comes next and how it is played —
+ * at home a dry piano at walking pace, out in deep space the same instrument
+ * slower and further away with a pad under it, on an alien world a celesta
+ * doubling the tune. A piece that has started is always allowed to finish.
  */
 
 const midi = (n) => 440 * 2 ** ((n - 69) / 12);
@@ -25,118 +26,560 @@ export function smoothstep(e0, e1, x) {
   return t * t * (3 - 2 * t);
 }
 
+const STEM_NAMES = ['home', 'leave', 'deep', 'approach', 'land', 'alien', 'void', 'wonder'];
+
+// Output level with the music enabled. Set so a piece sits around -26 dBFS
+// with its loudest notes ten decibels clear of the ceiling: quiet, the way
+// music you are meant to half-notice should be.
+const LEVEL = 1.5;
+
+// ---------------------------------------------------------------------------
+// Notation
+// ---------------------------------------------------------------------------
+
+const LETTER = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+const accidental = (a) => (a === '#' ? 1 : a === 'b' ? -1 : 0);
+const pcOf = (letter, acc) => (LETTER[letter] + accidental(acc) + 12) % 12;
+
+/** 'C4' is 60, as in MIDI. */
+function noteNumber(name) {
+  const m = /^([A-G])(#|b)?(-?\d)$/.exec(name);
+  if (!m) throw new Error(`not a note: ${name}`);
+  return (Number(m[3]) + 1) * 12 + LETTER[m[1]] + accidental(m[2]);
+}
+
+const QUALITIES = {
+  '': [0, 4, 7],
+  m: [0, 3, 7],
+  maj7: [0, 4, 7, 11],
+  maj9: [0, 4, 7, 11, 14],
+  m7: [0, 3, 7, 10],
+  m9: [0, 3, 7, 10, 14],
+  7: [0, 4, 7, 10],
+  add9: [0, 4, 7, 14],
+  madd9: [0, 3, 7, 14],
+  sus2: [0, 2, 7],
+  sus4: [0, 5, 7],
+  6: [0, 4, 7, 9],
+  m6: [0, 3, 7, 9],
+};
+
+function parseChord(name) {
+  const m = /^([A-G])(#|b)?(maj9|maj7|madd9|m9|m7|m6|add9|sus2|sus4|m|6|7)?(?:\/([A-G])(#|b)?)?$/.exec(name);
+  if (!m) throw new Error(`not a chord: ${name}`);
+  const root = pcOf(m[1], m[2]);
+  const intervals = QUALITIES[m[3] ?? ''];
+  const bass = m[4] ? pcOf(m[4], m[5]) : root;
+  return {
+    name,
+    root,
+    bass,
+    intervals,
+    pcs: [...new Set([...intervals.map((i) => (root + i) % 12), bass])],
+  };
+}
+
+/** 'E5:1.5 D5:.5 r:1 G4:1' — pitch and length in beats, 'r' for a rest. */
+function parseBar(text) {
+  const notes = [];
+  let beat = 0;
+  for (const token of text.trim().split(/\s+/)) {
+    const [pitch, len] = token.split(':');
+    const dur = Number(len);
+    if (!(dur > 0)) throw new Error(`no length in ${token}`);
+    if (pitch !== 'r') notes.push({ note: noteNumber(pitch), beat, dur });
+    beat += dur;
+  }
+  return { notes, beats: beat };
+}
+
+const MODES = {
+  major: [0, 2, 4, 5, 7, 9, 11],
+  lydian: [0, 2, 4, 6, 7, 9, 11],
+  aeolian: [0, 2, 3, 5, 7, 8, 10],
+};
+
+function parseScale(text) {
+  const [tonic, mode] = text.split(' ');
+  const m = /^([A-G])(#|b)?$/.exec(tonic);
+  const root = pcOf(m[1], m[2]);
+  return MODES[mode].map((d) => (root + d) % 12);
+}
+
+// ---------------------------------------------------------------------------
+// The pieces
+// ---------------------------------------------------------------------------
+
 /**
- * The progression: four chords, all diatonic to C major / A minor, moving by
- * step and sharing most of their tones. That shared-tone writing is what lets a
- * pad still gliding towards the last chord sit against one that has already
- * arrived at the next; the notes they disagree about are notes both chords hold.
+ * Eight short pieces. Each is a four-bar progression with a tune over it, a
+ * variation of that tune, and usually a contrasting section, arranged into a
+ * form that comes back to where it started: the shape of a song you could hum
+ * after hearing it twice, which is the whole difference between a score and a
+ * generated texture.
  *
- * A minor is the key for the same reason so much of this repertoire is in it:
- * the natural minor with an added ninth is warm rather than sad, and the drop to
- * the relative major on the way round reads as hopefulness without resolving,
- * which is the "there is so much out there" feeling rather than an ending.
- *
- * `full` spans five octaves so that every stem can pick from it in its own
- * register. `open` is the same harmony voiced in fourths and fifths with the
- * third left out — still in key, but rootless and unplaceable, which is what the
- * alien stem wants. `bass` is the pedal.
+ * `lh` is the left-hand figure. `form` names sections in order; `intro` is the
+ * first section's chords with no tune over them, which is how almost every
+ * piece in this style begins. `moods` are the places a piece belongs.
  */
-const PROGRESSION = [
+const PIECES = [
   {
-    name: 'Fmaj9',
-    bass: 29,
-    full: [41, 48, 53, 57, 60, 64, 67, 69, 72, 76, 81],
-    open: [53, 60, 64, 71, 76, 83],
+    name: 'Hearth',
+    scale: 'C major',
+    bpm: 72,
+    meter: 4,
+    lh: 'arp',
+    sections: {
+      A: {
+        chords: ['Cmaj7', 'G/B', 'Am7', 'Fmaj7'],
+        melody: ['E5:1.5 D5:.5 C5:1 G4:1', 'D5:2 B4:1 C5:1', 'C5:1.5 B4:.5 A4:1 E4:1', 'A4:3 r:1'],
+      },
+      A2: {
+        chords: ['Cmaj7', 'G/B', 'Am7', 'Fmaj7'],
+        melody: ['E5:1.5 D5:.5 C5:1 G4:1', 'D5:2 B4:1 C5:1', 'C5:1 D5:1 E5:1 G5:1', 'E5:3 r:1'],
+      },
+      B: {
+        chords: ['Fmaj7', 'Em7', 'Dm7', 'Gsus4'],
+        melody: ['A4:1 C5:1 F5:2', 'E5:1 D5:1 B4:2', 'D5:1.5 C5:.5 A4:2', 'G4:4'],
+      },
+    },
+    form: ['intro', 'A', 'A2', 'B', 'A2'],
+    ending: { chord: 'Cmaj7', note: 'C5' },
   },
   {
-    name: 'Cadd9',
-    bass: 24,
-    full: [36, 43, 48, 52, 55, 60, 62, 64, 67, 74, 79],
-    open: [48, 55, 62, 69, 74, 81],
+    name: 'Lantern Moss',
+    scale: 'G major',
+    bpm: 66,
+    meter: 3,
+    lh: 'arp',
+    sections: {
+      A: {
+        chords: ['G', 'Em7', 'Cmaj7', 'D'],
+        melody: ['B4:2 D5:1', 'G5:1.5 F#5:.5 E5:1', 'D5:2 B4:1', 'A4:3'],
+      },
+      A2: {
+        chords: ['G', 'Em7', 'Cmaj7', 'D'],
+        melody: ['B4:2 D5:1', 'G5:1.5 A5:.5 B5:1', 'A5:1 G5:1 E5:1', 'F#5:3'],
+      },
+      B: {
+        chords: ['Cmaj7', 'Bm7', 'Am7', 'D'],
+        melody: ['E5:1 G5:1 B5:1', 'A5:2 F#5:1', 'E5:1 C5:1 A4:1', 'D5:3'],
+      },
+    },
+    form: ['intro', 'A', 'A2', 'B', 'A', 'A2'],
+    ending: { chord: 'G', note: 'G5' },
   },
   {
-    name: 'Am9',
-    bass: 21,
-    full: [33, 40, 45, 48, 52, 55, 57, 59, 64, 71, 76],
-    open: [45, 52, 59, 64, 71, 76],
+    name: 'Small Hours',
+    scale: 'F major',
+    bpm: 60,
+    meter: 4,
+    lh: 'rolled',
+    sections: {
+      A: {
+        chords: ['Fmaj7', 'Am7', 'Bbmaj7', 'Csus4'],
+        melody: ['r:1 A4:1 C5:2', 'E5:3 r:1', 'D5:1 C5:1 A4:2', 'G4:4'],
+      },
+      A2: {
+        chords: ['Fmaj7', 'Am7', 'Bbmaj7', 'C'],
+        melody: ['r:1 A4:1 C5:1 F5:1', 'E5:2 C5:2', 'D5:2 F5:2', 'E5:4'],
+      },
+      B: {
+        chords: ['Dm7', 'Am7', 'Bbmaj7', 'C'],
+        melody: ['F5:1.5 E5:.5 D5:2', 'C5:2 A4:2', 'Bb4:1 C5:1 D5:2', 'C5:4'],
+      },
+    },
+    form: ['intro', 'A', 'A2', 'B', 'A2'],
+    ending: { chord: 'Fmaj7', note: 'A4' },
   },
   {
-    name: 'Em11',
-    bass: 28,
-    full: [40, 47, 52, 55, 59, 62, 64, 67, 71, 74, 79],
-    open: [52, 59, 62, 67, 74, 79],
+    name: 'Drift',
+    scale: 'D major',
+    bpm: 58,
+    meter: 4,
+    lh: 'drift',
+    pad: true,
+    intro: 4,
+    sections: {
+      A: {
+        chords: ['Dmaj7', 'Dmaj7', 'Gmaj7', 'Gmaj7', 'Bm7', 'Bm7', 'Asus2', 'A'],
+        melody: [
+          'F#5:4', 'E5:2 A4:2', 'D5:4', 'r:2 B4:2',
+          'D5:3 C#5:1', 'B4:4', 'C#5:2 E5:2', 'A4:4',
+        ],
+      },
+      A2: {
+        chords: ['Dmaj7', 'Dmaj7', 'Gmaj7', 'Gmaj7', 'Bm7', 'Bm7', 'Asus2', 'A'],
+        melody: [
+          'A5:4', 'F#5:2 E5:2', 'D5:4', 'r:2 F#5:2',
+          'F#5:3 E5:1', 'D5:4', 'E5:2 C#5:2', 'E5:4',
+        ],
+      },
+    },
+    form: ['intro', 'A', 'A2'],
+    ending: { chord: 'Dmaj7', note: 'F#5' },
+  },
+  {
+    name: 'Far Shore',
+    scale: 'Eb major',
+    bpm: 64,
+    meter: 4,
+    lh: 'arp-slow',
+    pad: true,
+    sections: {
+      A: {
+        chords: ['Ebmaj9', 'Cm7', 'Abmaj7', 'Bbsus4'],
+        melody: ['G5:1.5 F5:.5 Eb5:2', 'Bb4:2 C5:1 Eb5:1', 'C5:3 r:1', 'Bb4:4'],
+      },
+      A2: {
+        chords: ['Ebmaj9', 'Cm7', 'Abmaj7', 'Bbsus4'],
+        melody: ['G5:1.5 F5:.5 Eb5:1 G5:1', 'Bb5:3 G5:1', 'Ab5:1 G5:1 Eb5:2', 'F5:4'],
+      },
+      B: {
+        chords: ['Abmaj7', 'Gm7', 'Fm7', 'Bb'],
+        melody: ['C5:1 Eb5:1 G5:2', 'F5:1.5 D5:.5 Bb4:2', 'Ab4:1 C5:1 F5:2', 'D5:4'],
+      },
+    },
+    form: ['intro', 'A', 'A2', 'B', 'A2'],
+    ending: { chord: 'Ebmaj9', note: 'Eb5' },
+  },
+  {
+    name: 'Glass Garden',
+    // Lydian: a major key with its fourth raised. The chord a step above the
+    // tonic, over the tonic in the bass, is the whole sound of it — bright,
+    // in key, and faintly not of here.
+    scale: 'A lydian',
+    bpm: 62,
+    meter: 4,
+    lh: 'arp',
+    bell: true,
+    sections: {
+      A: {
+        chords: ['Aadd9', 'B/A', 'Aadd9', 'B/A'],
+        melody: ['E5:1 C#5:1 B4:1 C#5:1', 'D#5:3 r:1', 'E5:1 F#5:1 G#5:2', 'F#5:2 D#5:2'],
+      },
+      B: {
+        chords: ['F#m7', 'E/G#', 'Amaj7', 'B'],
+        melody: ['C#5:2 A4:2', 'B4:1 G#4:1 B4:2', 'C#5:1 E5:1 G#5:2', 'F#5:4'],
+      },
+    },
+    form: ['intro', 'A', 'B', 'A', 'B', 'A'],
+    ending: { chord: 'Aadd9', note: 'E5' },
+  },
+  {
+    name: 'Under Dark Water',
+    scale: 'A aeolian',
+    bpm: 54,
+    meter: 4,
+    lh: 'drift',
+    lhLow: 33,
+    pad: true,
+    sections: {
+      A: {
+        chords: ['Am', 'Fmaj7', 'Am', 'Em7'],
+        melody: ['r:2 E5:2', 'C5:4', 'r:2 B4:1 A4:1', 'G4:4'],
+      },
+      A2: {
+        chords: ['Am', 'Fmaj7', 'Am', 'Em7'],
+        melody: ['r:2 E5:2', 'A5:4', 'G5:2 E5:2', 'D5:4'],
+      },
+    },
+    form: ['intro', 'A', 'A2', 'A', 'A2'],
+    ending: { chord: 'Am9', note: 'E5' },
+  },
+  {
+    name: 'Pale Blue',
+    scale: 'Bb major',
+    bpm: 70,
+    meter: 4,
+    lh: 'arp',
+    sections: {
+      A: {
+        chords: ['Bb', 'F/A', 'Gm7', 'Ebmaj7'],
+        melody: ['D5:1 F5:1 Bb5:1.5 A5:.5', 'A5:2 F5:2', 'G5:1 F5:1 D5:2', 'Eb5:1 D5:1 Bb4:2'],
+      },
+      A2: {
+        chords: ['Bb', 'F/A', 'Gm7', 'Ebmaj7'],
+        melody: ['D5:1 F5:1 Bb5:1.5 A5:.5', 'C6:2 A5:2', 'Bb5:1 A5:1 G5:2', 'G5:3 r:1'],
+      },
+      B: {
+        chords: ['Cm7', 'Dm7', 'Ebmaj7', 'F'],
+        melody: ['Eb5:1.5 D5:.5 C5:2', 'D5:1 F5:1 A5:2', 'G5:2 Bb4:2', 'C5:4'],
+      },
+    },
+    form: ['intro', 'A', 'A2', 'B', 'A2'],
+    ending: { chord: 'Bb', note: 'D5' },
   },
 ];
 
-// Notes the piano and the bells are allowed to touch, as scale degrees rather
-// than chord tones: a melody note off the chord is the point, a melody note off
-// the key is a mistake.
-const PENTATONIC = [0, 2, 4, 7, 9];
+/**
+ * Where a piece is played, and how. `tempo` scales the written tempo, `pad`
+ * adds a soft sustained chord under the piano, `bell` doubles the tune on a
+ * celesta from the second section on, and `gap` is the range of silence after
+ * a piece, in seconds.
+ */
+const MOODS = {
+  home: {
+    pieces: ['Hearth', 'Lantern Moss', 'Small Hours', 'Pale Blue'],
+    tempo: 1, pad: false, bell: false, lift: false, gap: [20, 45],
+  },
+  deep: {
+    pieces: ['Drift', 'Far Shore', 'Under Dark Water', 'Small Hours'],
+    tempo: 0.95, pad: true, bell: false, lift: true, gap: [25, 55],
+  },
+  wonder: {
+    pieces: ['Far Shore', 'Pale Blue', 'Drift', 'Glass Garden'],
+    tempo: 1, pad: true, bell: true, lift: true, gap: [18, 40],
+  },
+  alien: {
+    pieces: ['Glass Garden', 'Drift', 'Far Shore'],
+    tempo: 0.96, pad: true, bell: true, lift: true, gap: [25, 50],
+  },
+  void: {
+    pieces: ['Under Dark Water', 'Drift'],
+    tempo: 0.92, pad: true, bell: false, lift: false, gap: [35, 70],
+  },
+};
 
-const STEM_NAMES = ['home', 'leave', 'deep', 'approach', 'land', 'alien', 'void', 'wonder'];
+const PIECE_ERRORS = [];
+const LIBRARY = new Map();
+for (const piece of PIECES) {
+  try {
+    const sections = {};
+    for (const [key, s] of Object.entries(piece.sections)) {
+      if (s.chords.length !== s.melody.length) {
+        PIECE_ERRORS.push(`${piece.name} ${key}: ${s.chords.length} chords, ${s.melody.length} bars of tune`);
+      }
+      sections[key] = {
+        chords: s.chords.map(parseChord),
+        melody: s.melody.map((text, i) => {
+          const bar = parseBar(text);
+          if (Math.abs(bar.beats - piece.meter) > 1e-6) {
+            PIECE_ERRORS.push(`${piece.name} ${key} bar ${i + 1} has ${bar.beats} beats, not ${piece.meter}`);
+          }
+          return bar.notes;
+        }),
+      };
+    }
+    LIBRARY.set(piece.name, {
+      ...piece,
+      sections,
+      scalePcs: parseScale(piece.scale),
+      ending: { chord: parseChord(piece.ending.chord), note: noteNumber(piece.ending.note) },
+    });
+  } catch (err) {
+    PIECE_ERRORS.push(`${piece.name}: ${err.message}`);
+  }
+}
 
-// Output level with the music enabled. Set so the loudest place the game can
-// reach sits near -20 dBFS with the peaks a good 10 dB below clipping; the
-// ceiling in the master chain guarantees the rest.
-const LEVEL = 0.68;
+// ---------------------------------------------------------------------------
+// Arranging
+// ---------------------------------------------------------------------------
 
 /**
- * Chord tones spread evenly across a register.
- *
- * Spread, not lowest-first: taking the first N tones in range bunches every
- * voicing at the bottom of its span, which puts four notes inside one octave and
- * is heard as congestion rather than as a chord. Sampling the available tones
- * across the whole range gives an open voicing with air between the notes, which
- * is most of why a pad sounds wide rather than thick.
+ * Left-hand voicing: the bass, then the chord spread open above it. Root
+ * position chords take the shape a pianist's hand falls into for a broken
+ * chord — fifth, octave, tenth, then the colour tone on top. Slash chords
+ * spread their tones evenly over the next two octaves instead, so a bass that
+ * is not the root does not end up a step below it.
  */
-function pick(notes, lo, hi, count) {
-  const inRange = notes.filter((n) => n >= lo && n <= hi);
-  if (!inRange.length) {
-    // Chord has nothing in this register: fold tones into it an octave at a time.
-    return notes.slice(0, count).map((n) => {
-      let v = n;
-      while (v < lo) v += 12;
-      while (v > hi) v -= 12;
-      return v;
-    });
+function leftHand(chord, low) {
+  const bass = low + (((chord.bass - low) % 12) + 12) % 12;
+  if (chord.bass === chord.root) {
+    const third = chord.intervals.find((i) => i >= 2 && i <= 5) ?? 4;
+    const colour = chord.intervals.find((i) => i === 9 || i === 10 || i === 11 || i === 14);
+    return [bass, bass + 7, bass + 12, bass + 12 + third, colour != null ? bass + 12 + colour : bass + 19];
   }
-  const out = [];
+  const pool = [];
+  for (let n = bass + 5; n <= bass + 26; n++) if (chord.pcs.includes(n % 12) && n % 12 !== chord.bass) pool.push(n);
+  const out = [bass];
+  const count = Math.min(4, pool.length);
   for (let i = 0; i < count; i++) {
-    const t = count === 1 ? 0 : i / (count - 1);
-    out.push(inRange[Math.round(t * (inRange.length - 1))]);
+    out.push(pool[Math.round((count === 1 ? 0 : i / (count - 1)) * (pool.length - 1))]);
   }
   return out;
 }
 
+const eighths = (order, accent) => order.map((i, k) => ({ i, b: k * 0.5, v: k === 0 ? accent : 0.33 }));
+
+/** Figures as indices into the voicing, beats and velocities. */
+const FIGURES = {
+  arp: {
+    4: eighths([0, 1, 2, 3, 4, 3, 2, 1], 0.48),
+    3: eighths([0, 1, 2, 3, 4, 3], 0.48),
+  },
+  'arp-slow': {
+    4: [{ i: 0, b: 0, v: 0.46 }, { i: 2, b: 1, v: 0.33 }, { i: 3, b: 2, v: 0.35 }, { i: 4, b: 3, v: 0.32 }],
+    3: [{ i: 0, b: 0, v: 0.46 }, { i: 2, b: 1, v: 0.33 }, { i: 4, b: 2, v: 0.32 }],
+  },
+  drift: {
+    4: [{ i: [0, 1], b: 0, v: 0.4 }, { i: [2, 3], b: 2, v: 0.3 }],
+    3: [{ i: [0, 1], b: 0, v: 0.4 }, { i: [2, 3], b: 1.5, v: 0.3 }],
+  },
+  rolled: {
+    4: [{ i: [0, 1, 2, 3, 4], b: 0, v: 0.37, roll: 0.05 }, { i: 0, b: 2, v: 0.28 }],
+    3: [{ i: [0, 1, 2, 3, 4], b: 0, v: 0.37, roll: 0.05 }],
+  },
+};
+
+// Nobody plays dead on the grid, or at one dynamic. A few milliseconds and a
+// few percent are the difference between a player and a music box.
+const jitter = () => (Math.random() - 0.5) * 0.02;
+const humanise = (v) => v * (1 + (Math.random() - 0.5) * 0.12);
+
+function padNotes(chord) {
+  const pool = [];
+  for (let n = 52; n <= 71; n++) if (chord.pcs.includes(n % 12)) pool.push(n);
+  return [pool[0], pool[Math.round((pool.length - 1) / 2)], pool[pool.length - 1]];
+}
+
+function makeBar(piece, chord, melody, { beat, shift = 0, bell = false, phraseEnd = false }) {
+  const length = beat * piece.meter;
+  // The pedal changes just after the next downbeat, so each chord rings into
+  // the bass of the next one and never into its arpeggio.
+  const pedal = length + 0.06;
+  const tones = leftHand(chord, piece.lhLow ?? 36);
+  const events = [];
+  for (const step of FIGURES[piece.lh][piece.meter]) {
+    const list = [].concat(step.i);
+    list.forEach((idx, k) => {
+      events.push({
+        part: 'lh',
+        voice: 'piano',
+        note: tones[Math.min(idx, tones.length - 1)],
+        vel: humanise(step.v),
+        b: step.b,
+        at: Math.max(step.b * beat + (step.roll ?? 0) * k + jitter(), 0),
+        release: pedal,
+      });
+    });
+  }
+  if (melody) {
+    melody.forEach((n, i) => {
+      let vel = 0.6;
+      if (i === 0) vel += 0.05;
+      if (n.dur >= 2) vel += 0.03;
+      if (phraseEnd && i === melody.length - 1) vel -= 0.07;
+      const at = Math.max(n.beat * beat + jitter(), 0);
+      events.push({
+        part: 'melody',
+        voice: 'piano',
+        note: n.note + shift,
+        vel: humanise(vel),
+        b: n.beat,
+        dur: n.dur,
+        at,
+        release: Math.max((n.beat + n.dur) * beat, pedal),
+      });
+      if (bell && n.note + shift + 12 <= 96) {
+        events.push({ part: 'bell', voice: 'bell', note: n.note + shift + 12, vel: vel * 0.55, b: n.beat, at, release: pedal });
+      }
+    });
+  }
+  return { chord: chord.name, pcs: chord.pcs, length, events, padChord: chord };
+}
+
+function arrange(piece, mood) {
+  const style = MOODS[mood] ?? MOODS.home;
+  const beat = 60 / (piece.bpm * style.tempo);
+  const melodic = piece.form.filter((s) => s !== 'intro');
+  const highest = Math.max(...Object.values(piece.sections).flatMap((s) => s.melody.flat().map((n) => n.note)));
+  // Out in the open the last statement of the tune sometimes goes up an
+  // octave, which is the cheapest way to make a return feel like an arrival.
+  const lift = style.lift && highest + 12 <= 88 && Math.random() < 0.4;
+  const bars = [];
+  let index = 0;
+  for (const step of piece.form) {
+    if (step === 'intro') {
+      const { chords } = piece.sections.A;
+      const count = piece.intro ?? chords.length;
+      for (let i = 0; i < count; i++) bars.push(makeBar(piece, chords[i % chords.length], null, { beat }));
+      continue;
+    }
+    const section = piece.sections[step];
+    const last = index === melodic.length - 1;
+    const bell = piece.bell || (style.bell && index > 0);
+    section.chords.forEach((chord, i) => {
+      bars.push(makeBar(piece, chord, section.melody[i], {
+        beat,
+        shift: lift && last ? 12 : 0,
+        bell,
+        phraseEnd: i === section.chords.length - 1,
+      }));
+    });
+    index++;
+  }
+
+  // The final chord, rolled slowly and left to ring out.
+  const end = piece.ending;
+  const tones = leftHand(end.chord, piece.lhLow ?? 36);
+  const ring = 8.5;
+  const finale = {
+    chord: end.chord.name,
+    pcs: end.chord.pcs,
+    length: ring,
+    padChord: end.chord,
+    events: [
+      ...tones.map((note, k) => ({ part: 'lh', voice: 'piano', note, vel: humanise(0.34), b: 0, at: k * 0.07, release: ring - 1 })),
+      { part: 'melody', voice: 'piano', note: end.note, vel: 0.5, b: 0, dur: piece.meter, at: tones.length * 0.07 + 0.05, release: ring - 1 },
+    ],
+  };
+  bars.push(finale);
+
+  // Pads hold across repeated chords instead of re-attacking every bar.
+  if (piece.pad || style.pad) {
+    for (let i = 0; i < bars.length; i++) {
+      if (i > 0 && bars[i].chord === bars[i - 1].chord) continue;
+      let span = 0;
+      for (let k = i; k < bars.length && bars[k].chord === bars[i].chord; k++) span += bars[k].length;
+      bars[i].pad = { notes: padNotes(bars[i].padChord), length: Math.min(span, bars[i] === finale ? 6 : span) };
+    }
+  }
+  for (const bar of bars) delete bar.padChord;
+
+  const duration = bars.reduce((sum, b) => sum + b.length, 0);
+  return { name: piece.name, mood, scale: piece.scalePcs, meter: piece.meter, beat, duration, bars };
+}
+
 // ---------------------------------------------------------------------------
-// Building blocks
+// Instruments
 // ---------------------------------------------------------------------------
 
-// Per context, because an AudioBuffer belongs to the context that made it.
+// Per context, because buffers and waves belong to the context that made them.
 const noiseCache = new WeakMap();
+const waveCache = new WeakMap();
 
 function noiseBuffer(ctx) {
   const cached = noiseCache.get(ctx);
   if (cached) return cached;
-  const length = ctx.sampleRate * 4;
-  const buffer = ctx.createBuffer(2, length, ctx.sampleRate);
-  for (let c = 0; c < 2; c++) {
-    const data = buffer.getChannelData(c);
-    for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1;
-  }
+  const length = ctx.sampleRate * 2;
+  const buffer = ctx.createBuffer(1, length, ctx.sampleRate);
+  const data = buffer.getChannelData(0);
+  for (let i = 0; i < length; i++) data[i] = Math.random() * 2 - 1;
   noiseCache.set(ctx, buffer);
   return buffer;
 }
 
 /**
- * A reverb tail, built rather than recorded.
- *
- * Two things make the difference between this and a plain burst of decaying
- * noise. The tail is progressively damped — the coefficient of the one-pole
- * filter falls as the tail decays, so the top end dies first, which is what a
- * large space actually does to sound and what stops the reverb from hissing. And
- * the two channels are generated independently, which decorrelates them and is
- * where the width comes from.
+ * The piano's tone as one waveform: a strong fundamental and a quickly falling
+ * series above it, the spectrum of a string struck by felt rather than by a
+ * bare hammer. The brightness that changes over a note's life is the filter's
+ * job, not the wave's.
+ */
+function pianoWave(ctx) {
+  const cached = waveCache.get(ctx);
+  if (cached) return cached;
+  const amps = [0, 1, 0.52, 0.3, 0.17, 0.11, 0.075, 0.05, 0.034, 0.022, 0.015, 0.01];
+  const real = new Float32Array(amps.length);
+  const imag = new Float32Array(amps);
+  const wave = ctx.createPeriodicWave(real, imag);
+  waveCache.set(ctx, wave);
+  return wave;
+}
+
+/**
+ * A reverb tail, built rather than recorded. The tail is progressively damped
+ * so the top end dies first, as it does in a real space, and the two channels
+ * are generated independently, which is where the width comes from.
  */
 function reverbImpulse(ctx, { seconds, decay = 2.6, damp = 0.5, preDelay = 0 }) {
   const rate = ctx.sampleRate;
@@ -166,698 +609,144 @@ function reverbImpulse(ctx, { seconds, decay = 2.6, damp = 0.5, preDelay = 0 }) 
   return buffer;
 }
 
-function lfo(ctx, dest, { rate, depth, type = 'sine', phase = 0 }) {
+function lfo(ctx, dest, { rate, depth, phase = 0 }) {
   const osc = ctx.createOscillator();
   const gain = ctx.createGain();
-  osc.type = type;
   osc.frequency.value = rate;
   gain.gain.value = depth;
   osc.connect(gain);
   gain.connect(dest);
-  // Oscillators started at different times are at different phases, which is
-  // all that keeps a dozen slow modulators from lining up into one pulse.
   osc.start(ctx.currentTime + phase);
-  return { osc, gain };
+  return osc;
 }
 
 /**
- * Chorus, as a pair of short modulated delays. Cheap, and it is most of what
- * separates a synthesiser pad that sounds like a chord from one that sounds like
- * a texture: the pitch of each copy wanders by a few cents against the others,
- * so the sum never settles.
+ * Felt piano. Two strings per note a cent or two apart, which beat slowly
+ * against each other the way a real unison does; a quick initial fall and then
+ * a long ring, longer the lower the note; a lowpass that closes as the note
+ * decays so it darkens while it fades; and a soft thump of felt on string.
+ * `release` is when the damper comes down, in context time.
  */
-function chorus(ctx, input, output, { depth = 0.0055, rate = 0.09, mix = 0.5 } = {}) {
-  const wet = ctx.createGain();
-  wet.gain.value = mix;
-  const dry = ctx.createGain();
-  dry.gain.value = 1 - mix * 0.35;
-  input.connect(dry);
-  dry.connect(output);
-  for (let i = 0; i < 2; i++) {
-    const delay = ctx.createDelay(0.25);
-    delay.delayTime.value = 0.018 + i * 0.013;
-    const pan = ctx.createStereoPanner();
-    pan.pan.value = i ? 0.65 : -0.65;
-    input.connect(delay);
-    delay.connect(pan);
-    pan.connect(wet);
-    lfo(ctx, delay.delayTime, { rate: rate * (i ? 1.37 : 1), depth, phase: i * 3.1 });
-  }
-  wet.connect(output);
-}
+function playPiano(ctx, dest, note, vel, when, release) {
+  const t = Math.max(when, ctx.currentTime);
+  const f = midi(note);
+  const peak = 0.24 * vel ** 1.6;
+  const high = clamp((note - 48) / 36, 0, 1);
+  const ring = clamp(3 * 2 ** (-(note - 60) / 20), 0.8, 6.5);
+  const lift = Math.max(release, t + 0.5);
 
-/**
- * A pad: one oscillator group per note, three oscillators per note detuned
- * against each other, through a resonant lowpass that drifts.
- *
- * Each note also gets its own slow amplitude breathing at a rate that shares no
- * common factor with its neighbours'. That is what makes the chord evolve while
- * standing still — voices surface and recede inside a sustained harmony instead
- * of the whole block sitting at one level.
- */
-function createPad(ctx, dest, {
-  notes = 4,
-  cutoff = 1200,
-  q = 1.1,
-  detune = 7,
-  types = ['sine', 'triangle', 'sine'],
-  breathe = 0.16,
-  spread = 0.75,
-  bias = 0,
-} = {}) {
-  const filter = ctx.createBiquadFilter();
-  filter.type = 'lowpass';
-  filter.frequency.value = cutoff;
-  filter.Q.value = q;
-  const wide = ctx.createGain();
-  filter.connect(wide);
-  chorus(ctx, wide, dest, { depth: 0.0035, rate: 0.07, mix: 0.35 });
-  // A lowpass swung across a third of its own cutoff is a filter sweep, and a
-  // filter sweep under everything for the whole piece is the single thing that
-  // makes a score read as a sound effect. Enough movement to keep the pad from
-  // sitting dead still, not enough to hear as a gesture of its own.
-  lfo(ctx, filter.frequency, { rate: 0.019, depth: cutoff * 0.06 });
-
-  const voices = [];
-  for (let i = 0; i < notes; i++) {
-    const level = ctx.createGain();
-    level.gain.value = 0;
-    const breath = ctx.createGain();
-    breath.gain.value = 1;
-    const pan = ctx.createStereoPanner();
-    pan.pan.value = (notes === 1 ? 0 : i / (notes - 1) - 0.5) * 2 * spread;
-    level.connect(breath);
-    breath.connect(pan);
-    pan.connect(filter);
-    lfo(ctx, breath.gain, {
-      rate: 0.021 + i * 0.0134,
-      depth: breathe,
-      phase: i * 1.7,
-    });
-
-    const oscs = [];
-    for (let k = 0; k < types.length; k++) {
-      const osc = ctx.createOscillator();
-      const g = ctx.createGain();
-      osc.type = types[k];
-      osc.frequency.value = midi(48);
-      // `bias` shifts the whole group off concert pitch. Used by the alien stem,
-      // where a few cents against every other stem beats slowly and is most of
-      // why it feels wrong in a way that is hard to point at.
-      osc.detune.value = (k - (types.length - 1) / 2) * detune + bias;
-      g.gain.value = 1 / types.length;
-      osc.connect(g);
-      g.connect(level);
-      osc.start();
-      oscs.push(osc);
-    }
-    voices.push({ level, oscs });
-  }
-
-  return {
-    filter,
-    set(list, gain, glide) {
-      const now = ctx.currentTime;
-      for (let i = 0; i < voices.length; i++) {
-        const note = list[i % list.length];
-        for (const osc of voices[i].oscs) {
-          osc.frequency.setTargetAtTime(midi(note), now, glide * 0.45);
-        }
-        // Outer voices sit back so the chord has a centre rather than reading as
-        // a stack of equals.
-        const weight = i === 0 ? 1 : i < 3 ? 0.86 : 0.62;
-        voices[i].level.gain.setTargetAtTime(gain * weight, now, glide);
-      }
-    },
-  };
-}
-
-/**
- * Wordless choir. Sawtooth pairs through two bandpass formants, which is the
- * cheapest thing that reads as a voice rather than a synthesiser: the ear
- * identifies a vowel from the position of two resonances, so putting them in
- * roughly the right place is enough. The vowel drifts between "oo" and "ah" on a
- * slow modulator, and each note has its own small vibrato, which keeps it from
- * sounding like one singer multiplied.
- */
-function createChoir(ctx, dest, { notes = 4, level = 1 } = {}) {
-  const bus = ctx.createGain();
-  bus.gain.value = 0;
-
-  const f1 = ctx.createBiquadFilter();
-  f1.type = 'bandpass';
-  f1.frequency.value = 520;
-  f1.Q.value = 3.2;
-  const f2 = ctx.createBiquadFilter();
-  f2.type = 'bandpass';
-  f2.frequency.value = 1180;
-  f2.Q.value = 4.5;
-  const g1 = ctx.createGain();
-  g1.gain.value = 1;
-  const g2 = ctx.createGain();
-  g2.gain.value = 0.42;
-  // Above the second formant a voice falls away steeply; without this the saws
-  // keep their buzz and it stops sounding human.
-  const roll = ctx.createBiquadFilter();
-  roll.type = 'lowpass';
-  roll.frequency.value = 2600;
-  roll.Q.value = 0.7;
-
-  bus.connect(f1);
-  bus.connect(f2);
-  f1.connect(g1);
-  f2.connect(g2);
-  const sum = ctx.createGain();
-  sum.gain.value = level;
-  g1.connect(sum);
-  g2.connect(sum);
-  sum.connect(roll);
-  chorus(ctx, roll, dest, { depth: 0.008, rate: 0.05, mix: 0.55 });
-
-  lfo(ctx, f1.frequency, { rate: 0.023, depth: 150 });
-  lfo(ctx, f2.frequency, { rate: 0.017, depth: 420, phase: 2.2 });
-
-  const voices = [];
-  for (let i = 0; i < notes; i++) {
-    const level_ = ctx.createGain();
-    level_.gain.value = 1 / notes;
-    const pan = ctx.createStereoPanner();
-    pan.pan.value = (i / Math.max(notes - 1, 1) - 0.5) * 1.5;
-    level_.connect(pan);
-    pan.connect(bus);
-    const oscs = [];
-    for (let k = 0; k < 2; k++) {
-      const osc = ctx.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.value = midi(60);
-      osc.detune.value = k ? 9 : -9;
-      const g = ctx.createGain();
-      g.gain.value = 0.5;
-      osc.connect(g);
-      g.connect(level_);
-      osc.start();
-      oscs.push(osc);
-      lfo(ctx, osc.detune, { rate: 4.1 + i * 0.37 + k * 0.11, depth: 5.5, phase: i * 0.8 });
-    }
-    voices.push({ oscs });
-  }
-
-  return {
-    set(list, gain, glide) {
-      const now = ctx.currentTime;
-      for (let i = 0; i < voices.length; i++) {
-        const note = list[i % list.length];
-        for (const osc of voices[i].oscs) osc.frequency.setTargetAtTime(midi(note), now, glide * 0.5);
-      }
-      bus.gain.setTargetAtTime(gain, now, glide);
-    },
-  };
-}
-
-/**
- * String ensemble. Sawtooths with a body resonance and a slow swell, which is
- * all a section is at this distance: the individual bows are inaudible, what
- * carries is the collective detune and the fact that the sound takes a second
- * or two to arrive.
- */
-function createStrings(ctx, dest, { notes = 4 } = {}) {
-  const body = ctx.createBiquadFilter();
-  body.type = 'bandpass';
-  body.frequency.value = 620;
-  body.Q.value = 0.55;
-  const tone = ctx.createBiquadFilter();
-  tone.type = 'lowpass';
-  tone.frequency.value = 2400;
-  tone.Q.value = 0.8;
-  const bus = ctx.createGain();
-  bus.gain.value = 0;
-  bus.connect(body);
-  body.connect(tone);
-  chorus(ctx, tone, dest, { depth: 0.007, rate: 0.06, mix: 0.5 });
-  // Bow pressure changing the brightness of the section, not a filter sweep.
-  lfo(ctx, tone.frequency, { rate: 0.014, depth: 220 });
-
-  const voices = [];
-  for (let i = 0; i < notes; i++) {
-    const level = ctx.createGain();
-    level.gain.value = 1 / notes;
-    const pan = ctx.createStereoPanner();
-    pan.pan.value = (i / Math.max(notes - 1, 1) - 0.5) * 1.7;
-    level.connect(pan);
-    pan.connect(bus);
-    const oscs = [];
-    for (let k = 0; k < 3; k++) {
-      const osc = ctx.createOscillator();
-      osc.type = 'sawtooth';
-      osc.frequency.value = midi(60);
-      osc.detune.value = (k - 1) * 11;
-      const g = ctx.createGain();
-      g.gain.value = 1 / 3;
-      osc.connect(g);
-      g.connect(level);
-      osc.start();
-      oscs.push(osc);
-      lfo(ctx, osc.detune, { rate: 3.3 + i * 0.29 + k * 0.13, depth: 4, phase: i * 1.1 });
-    }
-    voices.push({ oscs });
-  }
-
-  return {
-    set(list, gain, glide) {
-      const now = ctx.currentTime;
-      for (let i = 0; i < voices.length; i++) {
-        const note = list[i % list.length];
-        for (const osc of voices[i].oscs) osc.frequency.setTargetAtTime(midi(note), now, glide * 0.6);
-      }
-      // Strings swell rather than switch, so their gain always takes longer to
-      // arrive than the pads'.
-      bus.gain.setTargetAtTime(gain, now, glide * 1.8);
-    },
-  };
-}
-
-/**
- * Sub-bass. A sine at 30 Hz is nearly inaudible on the speakers most people
- * have, so this puts a fifth above the root and runs the pair through a gentle
- * waveshaper: the distortion products land an octave and a twelfth up, where
- * small speakers can reproduce them, and the ear infers the fundamental it
- * cannot actually hear. On a system that can reproduce it, the fundamental is
- * still there underneath.
- */
-function createSub(ctx, dest) {
-  const shaper = ctx.createWaveShaper();
-  const curve = new Float32Array(1024);
-  for (let i = 0; i < curve.length; i++) {
-    const x = (i / (curve.length - 1)) * 2 - 1;
-    curve[i] = Math.tanh(x * 1.9) / Math.tanh(1.9);
-  }
-  shaper.curve = curve;
-  // Drive into the saturator is fixed and the level is taken after it. How hard
-  // a waveshaper is driven is what decides how many harmonics it makes, so
-  // putting the level control in front of it would make the sub change timbre as
-  // its weight in the mix changed — thin when quiet, growling when loud.
-  const drive = ctx.createGain();
-  drive.gain.value = 0.75;
-  const post = ctx.createBiquadFilter();
-  post.type = 'lowpass';
-  post.frequency.value = 300;
-  post.Q.value = 0.6;
-  const level = ctx.createGain();
-  level.gain.value = 0;
-  drive.connect(shaper);
-  shaper.connect(post);
-  post.connect(level);
-  level.connect(dest);
-
-  const oscs = [];
-  for (let k = 0; k < 2; k++) {
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = midi(29);
-    g.gain.value = k ? 0.3 : 1;
-    osc.connect(g);
-    g.connect(drive);
-    osc.start();
-    oscs.push(osc);
-    lfo(ctx, osc.frequency, { rate: 0.031 + k * 0.017, depth: 0.09, phase: k * 2.4 });
-  }
-
-  return {
-    set(root, gain, glide) {
-      const now = ctx.currentTime;
-      oscs[0].frequency.setTargetAtTime(midi(root), now, glide * 0.7);
-      oscs[1].frequency.setTargetAtTime(midi(root + 7), now, glide * 0.7);
-      level.gain.setTargetAtTime(gain, now, glide);
-    },
-  };
-}
-
-/**
- * A slow pulse: the beat of something enormous rather than a drum. A low sine
- * gated by a shaped modulator, with a breath of filtered noise on the same
- * envelope so the swell has some texture at the top.
- */
-function createPulse(ctx, dest, { note = 26, rate = 0.055 } = {}) {
-  const bus = ctx.createGain();
-  bus.gain.value = 1;
-
-  // The swell, as its own stage in series with the level control rather than
-  // sharing a parameter with it. A modulator and a setTargetAtTime writing to
-  // the same AudioParam sum, so putting both on one gain node makes the level
-  // control fight the modulation and can drive the gain negative.
-  //
-  // Squaring the sine through a waveshaper is what turns a symmetric wobble into
-  // a swell with a long trough — the difference between a tremolo and a breath.
-  const shape = ctx.createGain();
-  shape.gain.value = 0;
-  const squash = ctx.createWaveShaper();
-  const curve = new Float32Array(513);
-  for (let i = 0; i < curve.length; i++) {
-    const x = (i / (curve.length - 1)) * 2 - 1;
-    curve[i] = x * x * x * x;
-  }
-  squash.curve = curve;
-  const swell = ctx.createOscillator();
-  swell.type = 'sine';
-  swell.frequency.value = rate;
-  swell.connect(squash);
-  squash.connect(shape.gain);
-  swell.start();
-
-  const level = ctx.createGain();
-  level.gain.value = 0;
-  bus.connect(shape);
-  shape.connect(level);
-  level.connect(dest);
-
-  const osc = ctx.createOscillator();
-  osc.type = 'sine';
-  osc.frequency.value = midi(note);
-  const og = ctx.createGain();
-  og.gain.value = 0.8;
-  osc.connect(og);
-  og.connect(bus);
-  osc.start();
-
-  const noise = ctx.createBufferSource();
-  noise.buffer = noiseBuffer(ctx);
-  noise.loop = true;
-  const nf = ctx.createBiquadFilter();
-  nf.type = 'bandpass';
-  nf.frequency.value = 180;
-  nf.Q.value = 1.4;
-  const ng = ctx.createGain();
-  ng.gain.value = 0.12;
-  noise.connect(nf);
-  nf.connect(ng);
-  ng.connect(bus);
-  noise.start();
-  lfo(ctx, nf.frequency, { rate: 0.043, depth: 60 });
-
-  return {
-    set(root, gain, glide) {
-      const now = ctx.currentTime;
-      osc.frequency.setTargetAtTime(midi(root), now, glide);
-      level.gain.setTargetAtTime(gain, now, glide);
-    },
-  };
-}
-
-/**
- * Filtered noise: the air in a room, the hiss of a thin atmosphere, the sense
- * that the silence has a shape. Bandpassed, never loud enough to identify as
- * noise.
- *
- * The sweep is small on purpose. A noise band walked across an octave is a
- * whoosh, and whooshes under a sustained chord are what make a score sound like
- * a wind tunnel rather than an ensemble. This is room tone; it should be
- * noticed only when it stops.
- */
-function createAir(ctx, dest, { freq = 420, q = 0.5, sweep = 0.06 } = {}) {
-  const src = ctx.createBufferSource();
-  src.buffer = noiseBuffer(ctx);
-  src.loop = true;
-  const f = ctx.createBiquadFilter();
-  f.type = 'bandpass';
-  f.frequency.value = freq;
-  f.Q.value = q;
-  // Two stages: one carries the slow swell, the other the level. Sharing a
-  // single gain node between a modulator and the level control would let the
-  // modulation dominate a quiet setting and push the gain below zero.
-  const drift = ctx.createGain();
-  drift.gain.value = 1;
-  const level = ctx.createGain();
-  level.gain.value = 0;
-  src.connect(f);
-  f.connect(drift);
-  drift.connect(level);
-  level.connect(dest);
-  src.start();
-  lfo(ctx, f.frequency, { rate: 0.027, depth: freq * sweep });
-  lfo(ctx, drift.gain, { rate: 0.013, depth: 0.45 });
-  return {
-    set(gain, glide) {
-      level.gain.setTargetAtTime(gain, ctx.currentTime, glide);
-    },
-  };
-}
-
-/**
- * Felt piano. A piano is not a sine: it is a stack of partials that are slightly
- * sharp of the harmonic series because real strings are stiff, and each partial
- * decays faster than the one below it, which is why the tone darkens as it
- * fades. Both of those are what the ear uses to identify the instrument, so both
- * are here; the hammer gets a click of filtered noise, and a lowpass stands in
- * for the felt.
- */
-function makePiano(ctx, dest, note, peak, when = 0) {
-  // Scheduled against the audio clock rather than fired on arrival. setTimeout
-  // drifts by a handful of milliseconds, which is inaudible on a pad and is
-  // exactly the wrong amount on a piano: a pulse you can feel is a pulse whose
-  // notes land where the ear predicted, and the whole difference between a
-  // played phrase and a sequence of separate notes lives in that few
-  // milliseconds. So the scheduler works a phrase ahead and passes times in.
-  const now = Math.max(when, ctx.currentTime);
-  const base = midi(note);
   const out = ctx.createGain();
-  out.gain.value = peak;
+  out.gain.value = 0;
+  out.gain.setValueAtTime(0, t);
+  out.gain.linearRampToValueAtTime(peak, t + 0.005);
+  out.gain.setTargetAtTime(peak * 0.4, t + 0.005, 0.24 - high * 0.12);
+  out.gain.setTargetAtTime(0, t + 0.45, ring);
+  out.gain.setTargetAtTime(0, lift, 0.17);
+
   const felt = ctx.createBiquadFilter();
   felt.type = 'lowpass';
-  felt.frequency.value = 1500 + peak * 8000;
-  felt.Q.value = 0.5;
+  felt.Q.value = 0.6;
+  felt.frequency.setValueAtTime(Math.min(f * (3 + 9 * vel), 9000), t);
+  felt.frequency.setTargetAtTime(Math.min(f * 1.8 + 300, 9000), t + 0.01, 0.4 + ring * 0.15);
+
   const pan = ctx.createStereoPanner();
-  pan.pan.value = (Math.random() - 0.5) * 0.5;
+  // Low notes a little to the left and high ones to the right: where they sit
+  // from the piano stool.
+  pan.pan.value = clamp((note - 62) / 48, -0.4, 0.4);
   out.connect(felt);
   felt.connect(pan);
   pan.connect(dest);
 
-  const partials = [
-    { ratio: 1, gain: 1, decay: 7.5 },
-    { ratio: 2.004, gain: 0.4, decay: 5.4 },
-    { ratio: 3.014, gain: 0.16, decay: 3.6 },
-    { ratio: 4.032, gain: 0.07, decay: 2.4 },
-    { ratio: 5.06, gain: 0.03, decay: 1.6 },
-  ];
-  for (const p of partials) {
+  const stop = lift + 1.4;
+  const wave = pianoWave(ctx);
+  const spread = 0.8 + Math.random() * 1.2;
+  for (const sign of [-1, 1]) {
     const osc = ctx.createOscillator();
+    osc.setPeriodicWave(wave);
+    osc.frequency.value = f;
+    osc.detune.value = sign * spread;
     const g = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = base * p.ratio;
-    g.gain.setValueAtTime(0, now);
-    g.gain.linearRampToValueAtTime(p.gain, now + 0.006);
-    g.gain.exponentialRampToValueAtTime(0.00001, now + p.decay);
+    g.gain.value = 0.5;
     osc.connect(g);
     g.connect(out);
-    osc.start(now);
-    // Stopping the oscillator after its own envelope has finished, rather than
-    // at a shared time, is what keeps the tail from being cut off audibly.
-    osc.stop(now + p.decay + 0.1);
+    osc.start(t);
+    osc.stop(stop);
   }
 
-  const hammer = ctx.createBufferSource();
-  hammer.buffer = noiseBuffer(ctx);
-  const hf = ctx.createBiquadFilter();
-  hf.type = 'bandpass';
-  hf.frequency.value = base * 3.5;
-  hf.Q.value = 0.9;
-  const hg = ctx.createGain();
-  hg.gain.setValueAtTime(0.5, now);
-  hg.gain.exponentialRampToValueAtTime(0.0001, now + 0.09);
-  hammer.connect(hf);
-  hf.connect(hg);
-  hg.connect(out);
-  hammer.start(now, Math.random() * 3);
-  hammer.stop(now + 0.12);
+  const thump = ctx.createBufferSource();
+  thump.buffer = noiseBuffer(ctx);
+  const tf = ctx.createBiquadFilter();
+  tf.type = 'bandpass';
+  tf.frequency.value = Math.min(f * 3, 4500);
+  tf.Q.value = 1;
+  const tg = ctx.createGain();
+  tg.gain.setValueAtTime(peak * 0.16, t);
+  tg.gain.exponentialRampToValueAtTime(0.00001, t + 0.035);
+  thump.connect(tf);
+  tf.connect(tg);
+  tg.connect(pan);
+  thump.start(t, Math.random());
+  thump.stop(t + 0.05);
 }
 
-/**
- * Melodic cells, as beat offsets within an eight-beat phrase paired with a step
- * up the available chord tones.
- *
- * Written out rather than improvised note by note because the thing that makes
- * this repertoire feel composed is recurrence: a phrase you have heard before,
- * arriving again a little different, is a tune, and five notes picked at random
- * every time is a wind chime. Steps index into whatever tones the current chord
- * offers in the current register, so one cell transposes itself through the
- * whole progression and stays consonant without any of them being written
- * twice.
- *
- * Fractional beats are on purpose. Everything landing on integers marches, and
- * a piano piece at this tempo should breathe.
- */
-const MOTIFS = [
-  [{ b: 0, s: 0 }, { b: 1.5, s: 2 }, { b: 3, s: 1 }, { b: 5, s: 3 }, { b: 6.5, s: 2 }],
-  [{ b: 0, s: 2 }, { b: 1, s: 1 }, { b: 2, s: 0 }, { b: 4, s: 2 }, { b: 6, s: 4 }],
-  [{ b: 0, s: 4 }, { b: 2, s: 3 }, { b: 3.5, s: 2 }, { b: 4.5, s: 3 }, { b: 6, s: 1 }],
-  [{ b: 0.5, s: 1 }, { b: 2, s: 2 }, { b: 3, s: 2 }, { b: 5, s: 0 }, { b: 7, s: 1 }],
-  [{ b: 0, s: 3 }, { b: 1.5, s: 4 }, { b: 3, s: 3 }, { b: 4, s: 1 }, { b: 6.5, s: 0 }],
-  // Sparse cells, for the places that want more air than tune.
-  [{ b: 0, s: 0 }, { b: 3, s: 2 }, { b: 6, s: 1 }],
-  [{ b: 1, s: 2 }, { b: 4.5, s: 0 }],
-];
-
-/** Seconds per beat. About seventy to the minute: walking pace, not marching. */
-const BEAT = 0.86;
-const PHRASE_BEATS = 8;
-
-/**
- * The pitches a melody is allowed to walk, ascending through a register.
- *
- * Chord tones alone are not enough to make a tune out of. Inside the two
- * octaves a melody actually occupies a four-note chord offers three or four
- * pitches, a fourth and a fifth apart, so a five-note motif drawn from them
- * repeats pitches it did not mean to repeat and leaps between the ones it does
- * not — which is how the first version of this produced phrases like B4 B4 B4.
- *
- * Filling in the rest of the key gives a dozen or so pitches a step or two
- * apart, and stepwise motion through a scale with the chord tones landing on
- * the strong beats is, more or less, what this kind of piano writing is.
- *
- * Rootless voicings skip the fill. The alien stem wants the wide unplaceable
- * intervals that chord tones on their own produce, so there the old behaviour
- * is the intended one.
- */
-function melodyPool(tones, lo, hi, fill) {
-  const classes = new Set(tones.map((n) => ((n % 12) + 12) % 12));
-  if (fill) for (const d of PENTATONIC) classes.add(d % 12);
-  const out = [];
-  for (let n = lo; n <= hi; n++) if (classes.has(((n % 12) + 12) % 12)) out.push(n);
-  return out.length ? out : pick(tones, lo, hi, 5);
-}
-
-/**
- * A struck metal partial stack, tuned so its overtones are inharmonic in a way
- * that reads as a bell rather than a pitched note. Used sparingly on alien
- * worlds, where the point is a sound you cannot place.
- */
-function makeBell(ctx, dest, note, peak) {
-  const now = ctx.currentTime;
-  const base = midi(note);
-  const out = ctx.createGain();
-  out.gain.value = peak;
+/** Celesta: a nearly harmonic struck bar with a bright attack and short ring. */
+function playBell(ctx, dest, note, vel, when) {
+  const t = Math.max(when, ctx.currentTime);
+  const f = midi(note);
+  const peak = 0.11 * vel ** 1.4;
   const pan = ctx.createStereoPanner();
-  pan.pan.value = (Math.random() - 0.5) * 1.4;
-  out.connect(pan);
+  pan.pan.value = (Math.random() - 0.5) * 0.8;
   pan.connect(dest);
-  const ratios = [1, 2.76, 5.4, 8.93];
-  const decays = [9, 6, 4, 2.6];
-  for (let i = 0; i < ratios.length; i++) {
+  const partials = [[1, 1, 1.3], [2, 0.28, 0.55], [3, 0.1, 0.3], [4.17, 0.06, 0.18]];
+  for (const [ratio, gain, tc] of partials) {
     const osc = ctx.createOscillator();
+    osc.frequency.value = f * ratio;
     const g = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = base * ratios[i];
-    g.gain.setValueAtTime(0, now);
-    g.gain.linearRampToValueAtTime(0.6 / (i + 1), now + 0.01);
-    g.gain.exponentialRampToValueAtTime(0.00001, now + decays[i]);
+    g.gain.value = 0;
+    g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(peak * gain, t + 0.003);
+    g.gain.setTargetAtTime(0, t + 0.003, tc);
     osc.connect(g);
-    g.connect(out);
-    osc.start(now);
-    osc.stop(now + decays[i] + 0.1);
+    g.connect(pan);
+    osc.start(t);
+    osc.stop(t + tc * 8);
   }
 }
 
-/**
- * Plucked string, somewhere between a harp and a celesta.
- *
- * This is the voice that makes the score read as played rather than as
- * generated. Pads and noise beds have no attack, and without an attack the ear
- * has nothing to time the music by — a chord that fades in over nine seconds is
- * weather, not a phrase. A pluck is almost all attack: a few milliseconds of
- * broadband edge, then harmonics that decay at their own rates. That edge is
- * also the only thing in the whole piece with energy above 5 kHz.
- *
- * A harp's partials are close to a true harmonic series — much closer than a
- * piano's, whose thick stiff strings run sharp — so these ratios are whole
- * numbers, and the brightness comes from how slowly the upper ones fade rather
- * than from where they sit.
- */
-function makePluck(ctx, dest, note, peak) {
-  const now = ctx.currentTime;
-  const base = midi(note);
+/** A soft sustained chord that fades in under the piano and out again. */
+function playPad(ctx, dest, notes, when, length, level) {
+  const t = Math.max(when, ctx.currentTime);
+  const hold = Math.max(length - 0.4, 2.8);
   const out = ctx.createGain();
-  out.gain.value = peak;
-  const tone = ctx.createBiquadFilter();
-  tone.type = 'lowpass';
-  // Higher notes come off the string brighter, which is most of why a harp
-  // glissando sounds like it is rising rather than merely getting higher.
-  tone.frequency.value = Math.min(base * 9 + 1800, 14000);
-  tone.Q.value = 0.4;
-  const pan = ctx.createStereoPanner();
-  pan.pan.value = (Math.random() - 0.5) * 1.2;
-  out.connect(tone);
-  tone.connect(pan);
-  pan.connect(dest);
-
-  // Long fundamental, quick top: the note darkens as it rings, the way a real
-  // string sheds its high partials first.
-  const partials = [
-    { ratio: 1, gain: 1, decay: 3.6 },
-    { ratio: 2, gain: 0.5, decay: 2.5 },
-    { ratio: 3, gain: 0.26, decay: 1.7 },
-    { ratio: 4, gain: 0.13, decay: 1.1 },
-    { ratio: 5, gain: 0.07, decay: 0.75 },
-    { ratio: 6, gain: 0.035, decay: 0.5 },
-  ];
-  for (const p of partials) {
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = base * p.ratio;
-    g.gain.setValueAtTime(0, now);
-    g.gain.linearRampToValueAtTime(p.gain, now + 0.004);
-    g.gain.exponentialRampToValueAtTime(0.00001, now + p.decay);
-    osc.connect(g);
-    g.connect(out);
-    osc.start(now);
-    osc.stop(now + p.decay + 0.1);
-  }
-
-  // The fingernail leaving the string. Brief and bright, and the reason a pluck
-  // can be heard through a chord that is louder than it is.
-  const nail = ctx.createBufferSource();
-  nail.buffer = noiseBuffer(ctx);
-  const nf = ctx.createBiquadFilter();
-  nf.type = 'bandpass';
-  nf.frequency.value = Math.min(base * 6, 9000);
-  nf.Q.value = 1.2;
-  const ng = ctx.createGain();
-  ng.gain.setValueAtTime(0.32, now);
-  ng.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
-  nail.connect(nf);
-  nf.connect(ng);
-  ng.connect(out);
-  nail.start(now, Math.random() * 3);
-  nail.stop(now + 0.07);
-}
-
-/**
- * A single high tone that fades up out of nothing and back into it. No attack,
- * so it cannot be located in time — it is simply there and then it is not, which
- * is what makes it read as distance rather than as a note.
- */
-function makeShimmer(ctx, dest, note, peak) {
-  const now = ctx.currentTime;
-  const out = ctx.createGain();
-  out.gain.setValueAtTime(0.0001, now);
-  out.gain.exponentialRampToValueAtTime(peak, now + 3.4);
-  out.gain.exponentialRampToValueAtTime(0.00001, now + 11);
-  const pan = ctx.createStereoPanner();
-  pan.pan.value = (Math.random() - 0.5) * 1.7;
-  out.connect(pan);
-  pan.connect(dest);
-  for (let k = 0; k < 2; k++) {
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.value = midi(note + k * 12);
-    osc.detune.value = k ? 6 : -6;
-    g.gain.value = k ? 0.3 : 1;
-    osc.connect(g);
-    g.connect(out);
-    osc.start(now);
-    osc.stop(now + 11.5);
-  }
+  out.gain.value = 0;
+  out.gain.setValueAtTime(0, t);
+  out.gain.linearRampToValueAtTime(level, t + 2.6);
+  out.gain.setValueAtTime(level, t + hold);
+  out.gain.setTargetAtTime(0, t + hold, 1.3);
+  const filter = ctx.createBiquadFilter();
+  filter.type = 'lowpass';
+  filter.frequency.value = 900;
+  filter.Q.value = 0.4;
+  out.connect(filter);
+  filter.connect(dest);
+  const stop = t + hold + 8;
+  notes.forEach((note, i) => {
+    const pan = ctx.createStereoPanner();
+    pan.pan.value = (i / Math.max(notes.length - 1, 1) - 0.5) * 1.2;
+    pan.connect(out);
+    for (const [type, cents, gain] of [['triangle', -5, 0.5], ['sawtooth', 6, 0.14]]) {
+      const osc = ctx.createOscillator();
+      osc.type = type;
+      osc.frequency.value = midi(note);
+      osc.detune.value = cents;
+      const g = ctx.createGain();
+      g.gain.value = gain / notes.length;
+      osc.connect(g);
+      g.connect(pan);
+      osc.start(t);
+      osc.stop(stop);
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -866,10 +755,7 @@ function makeShimmer(ctx, dest, note, peak) {
 
 /**
  * Mix weights from camera state. Values are 0–1 and do not need to sum to 1.
- *
- * `awe` is separate from the stem weights: it is how much of the discovery build
- * is unlocked, and it drives the choir and strings on top of whatever else is
- * playing rather than replacing it.
+ * They choose the mood of the next piece and how far away it sounds.
  */
 export function sceneWeights({
   viewFromEarth = false,
@@ -890,8 +776,6 @@ export function sceneWeights({
   if (kind === 'black-hole') {
     w.void = 1;
     w.deep = 0.22;
-    // Close to the hole the awe is dread rather than delight, so the build is
-    // held well back: it colours the drones instead of taking them over.
     w.awe = smoothstep(60, 8, distanceRadii) * 0.45;
     w.wonder = w.awe * 0.5;
     return w;
@@ -913,26 +797,16 @@ export function sceneWeights({
   }
 
   // Other stars and their planets are unfamiliar; ours is not. The Sun shares
-  // the 'star' kind with the whole catalogue, so without excluding it by key,
-  // flying home to the Sun plays the alien stem.
+  // the 'star' kind with the whole catalogue, so it is excluded by key.
   const exo = kind === 'exo-planet' || (kind === 'star' && key !== 'sun');
   const world = kind === 'body' || kind === 'moon';
-  // The Sun is neither a world nor alien, but arriving at it is still an
-  // arrival, so it needs the approach build like anything else you fly to.
   const target = world || exo || key === 'sun';
 
-  // How much of the arrival is underway, computed before anything else so that
-  // every departure and travelling layer can be told to make room for it.
   const arriving = target ? smoothstep(90, 12, distanceRadii) : 0;
   const arrived = target ? smoothstep(9, 2.4, distanceRadii) : 0;
 
-  // Leaving: home recedes and the low end grows, tied to the same altitude so it
-  // reads as one continuous departure rather than a cue changing.
-  //
-  // On a log scale, because that is how the camera moves — distance changes by
-  // factors, not by increments. Measured linearly, home was still at four
-  // fifths of full weight out past geostationary orbit, which is well past the
-  // point where anything about the view still says civilisation.
+  // Leaving Earth, measured on a log scale because that is how the camera
+  // moves — distance changes by factors, not by increments.
   if (earthAlt < 4e5 && fromSunAU < 1.3) {
     const gone = smoothstep(2.3, 4.8, Math.log10(Math.max(earthAlt, 1)));
     w.home = (1 - gone) * 0.95;
@@ -942,24 +816,16 @@ export function sceneWeights({
       w.land = arrived * 0.85;
       w.awe = smoothstep(9, 2.5, distanceRadii) * 0.35;
     }
-    // Departure yields to arrival: without this, coming down at the Moon plays
-    // the leaving-Earth stem at full weight underneath the landing.
     w.leave = gone * (1 - w.land * 0.8) * (1 - w.approach * 0.3);
     w.wonder = w.awe;
     return w;
   }
 
   const far = smoothstep(1.5, 9, fromSunAU);
-
-  // Everything below layers rather than switches: deep space never fully leaves
-  // once you are out there, it just makes room.
   w.deep = 0.35 + far * 0.55;
   w.leave = (1 - far) * 0.4;
 
   if (arriving > 0) {
-    // Anticipation peaks on the way in and steps back once you are there, so the
-    // arrival hands over to the intimacy of being somewhere rather than the two
-    // playing over each other.
     w.approach = arriving * 0.85 * (1 - arrived * 0.6);
     w.deep *= 1 - arriving * 0.45;
     w.awe = smoothstep(30, 4, distanceRadii) * 0.5;
@@ -971,8 +837,6 @@ export function sceneWeights({
   }
   if (exo) {
     w.alien = smoothstep(40, 4, distanceRadii) * 0.9;
-    // An alien world is its own atmosphere; the generic arrival and landing
-    // layers thin out so the unfamiliar harmony is what is actually heard.
     w.approach *= 0.6;
     w.land *= 0.55;
     w.awe = Math.max(w.awe, smoothstep(20, 3, distanceRadii) * 0.6);
@@ -985,14 +849,37 @@ export function sceneWeights({
   return w;
 }
 
+/** Which kind of piece the current place calls for. */
+function moodOf(m) {
+  const score = {
+    home: (m.home ?? 0) + (m.land ?? 0) * 0.9,
+    deep: (m.deep ?? 0) + (m.leave ?? 0) * 0.8,
+    wonder: (m.approach ?? 0) * 0.7 + (m.awe ?? 0) + (m.wonder ?? 0) * 0.4,
+    alien: (m.alien ?? 0) * 1.3,
+    void: (m.void ?? 0) * 1.2,
+  };
+  let best = 'home';
+  for (const [mood, v] of Object.entries(score)) if (v > score[best]) best = mood;
+  return best;
+}
+
+function presenceOf(m) {
+  const total = STEM_NAMES.reduce((sum, n) => sum + clamp(m[n] ?? 0, 0, 1), 0);
+  return clamp(total / 0.3, 0, 1);
+}
+
 // ---------------------------------------------------------------------------
 // Engine
 // ---------------------------------------------------------------------------
 
+// How far ahead of the audio clock bars are written. A whole bar goes down at
+// once, so this only has to cover the timer's own lateness.
+const LOOKAHEAD = 1.2;
+
 /**
- * `context`, `autoResume` and `schedule` exist for the offline render test, which
- * supplies its own OfflineAudioContext and places transients itself. In the app
- * all three defaults are what you want.
+ * `context`, `autoResume` and `schedule` exist for the offline render tests,
+ * which supply their own OfflineAudioContext and place pieces themselves. In
+ * the app all three defaults are what you want.
  */
 export function createAmbient({ context = null, autoResume = true, schedule = true } = {}) {
   let ctx = context;
@@ -1000,18 +887,7 @@ export function createAmbient({ context = null, autoResume = true, schedule = tr
   let muted = false;
   let started = false;
   let timers = [];
-  let stems = {};
   let parts = {};
-  let chordIndex = 0;
-  // Phrases played on the current chord, so the progression can be driven by
-  // the piano rather than by a clock the piano cannot see.
-  let phrasesHeld = 0;
-  // Height of the melody in its register, 0 to 1, carried between phrases.
-  let anchorPos = 0.45;
-  // Multiplies every glide and crossfade time. Only the offline render test
-  // touches it: that test has no wall clock, so it needs the graph to arrive at
-  // its target levels immediately rather than over the half-minute the music
-  // actually wants.
   let glideScale = 1;
   let mix = {
     home: 1, leave: 0, deep: 0, approach: 0,
@@ -1019,310 +895,118 @@ export function createAmbient({ context = null, autoResume = true, schedule = tr
   };
   let lastApply = -1e9;
 
+  // The piece being played, and the silence after the last one.
+  let current = null;
+  let restUntil = 0;
+  let restFrom = 0;
+  let lastMood = null;
+  const history = [];
+
   function later(ms, fn) {
     timers.push(setTimeout(fn, ms));
   }
 
-  /**
-   * Move every stem to the next chord at once. Each one glides at its own rate —
-   * the sub takes half a minute, the pads ten to twenty seconds, the strings
-   * longer still — so the change is never an event, but they are all heading to
-   * the same place, which is what keeps them in tune with each other.
-   */
-  function advanceHarmony() {
-    chordIndex = (chordIndex + 1) % PROGRESSION.length;
-    voiceHarmony();
+  function choose(mood, name) {
+    if (name && LIBRARY.has(name)) return LIBRARY.get(name);
+    const list = (MOODS[mood] ?? MOODS.home).pieces.filter((n) => LIBRARY.has(n));
+    // Not the last two played, where there is a choice: hearing a tune again
+    // is the point, hearing it twice running is a loop.
+    const fresh = list.filter((n) => !history.slice(-2).includes(n));
+    const pool = fresh.length ? fresh : list;
+    const pickName = pool[(Math.random() * pool.length) | 0];
+    history.push(pickName);
+    if (history.length > 6) history.shift();
+    return LIBRARY.get(pickName);
   }
 
-  /**
-   * Place every stem on the current chord. Levels here are fixed: the stem gains
-   * set by `apply` are the only mixer, so multiplying by the mix again in here
-   * would square it and leave a stem at half weight sounding a quarter as loud.
-   *
-   * The exception is the wonder pad, which is scaled by `awe` on top of a stem
-   * gain that is already `awe` — deliberately squared, so the shimmering top of
-   * the build only arrives at the very end of it rather than fading up alongside
-   * everything else. The climax should feel earned rather than switched on.
-   */
-  function voiceHarmony() {
-    if (!ctx) return;
-    const { full, open, bass } = PROGRESSION[chordIndex];
-    const g = (seconds) => seconds * glideScale;
-
-    // Everything in here is now accompaniment, and quiet enough that the piano
-    // is unambiguously the thing playing.
-    //
-    // The beds used to be the score: eight sustained stems, each a filtered
-    // oscillator stack over a band of noise, and the piano was a few notes
-    // sprinkled on top in two of the eight places. Sustained synthesis with no
-    // attack and a modulator on everything is heard as a sound effect, not as
-    // music, however carefully it is voiced — which is exactly the complaint.
-    // So the levels below are roughly a third of what they were, the noise beds
-    // are silent, and the pulses are gone. What is left is a cushion under the
-    // piano: enough to place the harmony while the sustain pedal is down,
-    // little enough that you would not notice it alone.
-    parts.homePad.set(pick(full, 48, 76, 4), 0.014, g(9));
-    parts.homeSub.set(bass + 12, 0.02, g(14));
-    parts.homeStrings.set(pick(full, 55, 79, 4), 0.009, g(10));
-
-    parts.leavePad.set(pick(full, 36, 64, 4), 0.014, g(14));
-    parts.leaveSub.set(bass, 0.021, g(20));
-    parts.leaveStrings.set(pick(full, 48, 72, 4), 0.009, g(12));
-
-    parts.deepPad.set(pick(full, 40, 79, 5), 0.012, g(18));
-    parts.deepSub.set(bass, 0.026, g(24));
-    parts.deepStrings.set(pick(full, 52, 76, 4), 0.01, g(14));
-    parts.deepPulse.set(bass + 12, 0, g(12));
-
-    parts.approachStrings.set(pick(full, 55, 79, 4), 0.022, g(10));
-    parts.approachChoir.set(pick(full, 52, 74, 4), 0.016, g(12));
-    parts.approachPad.set(pick(full, 45, 72, 4), 0.016, g(11));
-
-    parts.landPad.set(pick(full, 52, 79, 4), 0.014, g(8));
-    parts.landSub.set(bass + 12, 0.02, g(12));
-    parts.landStrings.set(pick(full, 57, 81, 4), 0.009, g(9));
-
-    parts.alienPad.set(pick(open, 45, 79, 5), 0.026, g(12));
-    parts.alienSub.set(bass, 0.03, g(16));
-
-    // The void keeps a little more of its bottom than anywhere else. It is the
-    // one place with almost no piano in it, so with the bed at the same level as
-    // everywhere else there would be nothing there at all. It stays at the bass
-    // octave rather than below — an octave down puts the A minor root at 14 Hz,
-    // which no speaker reproduces and which only eats headroom.
-    parts.voidSub.set(bass, 0.04, g(22));
-    parts.voidPulse.set(bass, 0, g(16));
-
-    parts.wonderStrings.set(pick(full, 60, 84, 4), 0.026, g(9));
-    parts.wonderChoir.set(pick(full, 57, 81, 4), 0.018, g(11));
-    parts.wonderPad.set(pick(full, 67, 91, 4), 0.014 * clamp(mix.awe, 0, 1), g(13));
+  function playBar(bar, t0) {
+    for (const e of bar.events) {
+      if (e.voice === 'bell') playBell(ctx, parts.bell, e.note, e.vel, t0 + e.at);
+      else playPiano(ctx, parts.piano, e.note, e.vel, t0 + e.at, t0 + e.release);
+    }
+    if (bar.pad) playPad(ctx, parts.pad, bar.pad.notes, t0, bar.pad.length, 0.05);
   }
 
-  /**
-   * The piano part, which is now the piece rather than a decoration on it.
-   *
-   * One eight-beat phrase is written and scheduled at a time, a phrase ahead of
-   * the audio clock. Left hand states the chord low and holds it; right hand
-   * plays a motif above. Where the camera is chooses the register, how many of
-   * the motif's notes actually get played, and how often a phrase is followed
-   * by a bar of nothing — so somewhere vast is the same music with more silence
-   * in it rather than different music.
-   */
-  function planPhrase() {
-    const chord = PROGRESSION[chordIndex];
-    // Familiar places play more notes and sit in the middle of the keyboard;
-    // empty ones play fewer and drift to the edges of it.
-    const close = clamp(mix.home + mix.land * 0.95 + mix.approach * 0.6, 0, 1.3);
-    const far = clamp(mix.deep + mix.leave * 0.8 + mix.void, 0, 1.3);
-    const lift = clamp(mix.awe + mix.wonder * 0.6, 0, 1.4);
-    const strange = clamp(mix.alien, 0, 1);
-
-    // Alien systems take the rootless voicing. Still a piano, still in key, but
-    // stacked in fourths and fifths so it cannot be placed.
-    const rootless = strange > 0.45;
-    const tones = rootless ? chord.open : chord.full;
-    // Melody register: chest height at home, up an octave under awe, down one
-    // out in the dark.
-    const lo = Math.round(60 + lift * 7 - far * 6);
-    const pool = melodyPool(tones, lo, lo + 22, !rootless);
-    // Where in that register this phrase sits. It walks rather than jumps, so
-    // one phrase begins near where the last one ended and the part wanders the
-    // way a melody does instead of being re-rolled from scratch every eight
-    // beats.
-    anchorPos = clamp(anchorPos + (Math.random() - 0.5) * 0.5, 0, 1);
-    const anchor = Math.round(anchorPos * Math.max(pool.length - 5, 0));
-    const density = clamp(0.55 + close * 0.4 + lift * 0.2 - far * 0.25, 0.25, 1);
-    const gain = 0.5 + 0.5 * clamp(close + lift * 0.7 + far * 0.5 + strange, 0, 1.2);
-
-    const notes = [];
-    const bells = [];
-
-    // Left hand. Root on the downbeat, then a tone from the middle of the chord
-    // halfway through, which is as much as this style ever asks of it.
-    notes.push({ note: chord.bass + 12, peak: 0.13 * gain, at: 0 });
-    if (Math.random() < 0.75) {
-      const inner = pick(tones, chord.bass + 19, chord.bass + 31, 2);
-      notes.push({
-        note: inner[Math.random() < 0.5 ? 0 : 1],
-        peak: 0.085 * gain,
-        at: BEAT * 4,
-      });
+  function tick() {
+    later(250, tick);
+    if (!ctx || muted) return;
+    const now = ctx.currentTime;
+    if (!current) {
+      const mood = moodOf(mix);
+      // Arriving somewhere that calls for different music cuts the silence
+      // short, so a new place is greeted rather than waited out.
+      const early = lastMood && mood !== lastMood && now - restFrom > 6;
+      if (now < restUntil && !early) return;
+      if (presenceOf(mix) < 0.05) return;
+      current = { plan: arrange(choose(mood), mood), index: 0, nextAt: now + 0.2 };
+      lastMood = mood;
     }
-
-    // Right hand.
-    const motif = far > 0.75 && Math.random() < 0.6
-      ? MOTIFS[5 + ((Math.random() * 2) | 0)]
-      : MOTIFS[(Math.random() * 5) | 0];
-    for (let i = 0; i < motif.length; i++) {
-      if (Math.random() > density) continue;
-      const cell = motif[i];
-      // The first note of a phrase carries a little more weight, and the rest
-      // taper, which is most of what separates a phrase from a list of notes.
-      const accent = i === 0 ? 1 : 0.78 - i * 0.04;
-      // A few milliseconds of scatter. Nobody plays dead on the grid, and a
-      // piano that does sounds like a music box.
-      const swing = (Math.random() - 0.5) * 0.022;
-      notes.push({
-        note: pool[Math.min(anchor + cell.s, pool.length - 1)],
-        peak: 0.155 * gain * accent,
-        at: Math.max(cell.b * BEAT + swing, 0),
-      });
-    }
-
-    // Bells still belong to alien worlds, over the piano rather than instead.
-    if (strange > 0.4 && Math.random() < 0.35) {
-      bells.push({
-        note: chord.open[(Math.random() * chord.open.length) | 0] + 12,
-        peak: 0.018 * strange,
-        at: Math.random() * BEAT * 4,
-      });
-    }
-
-    // Rests between phrases, longer where there is more room. A piece that
-    // never stops talking cannot be listened past, and most of this score is
-    // meant to be listened past.
-    const rest = far > 0.6 && Math.random() < 0.5 ? PHRASE_BEATS : 0;
-    return { notes, bells, beats: PHRASE_BEATS + rest };
-  }
-
-  function schedulePhrase() {
-    if (!ctx || muted) {
-      later(1500, schedulePhrase);
-      return;
-    }
-    const phrase = planPhrase();
-    const start = ctx.currentTime + 0.12;
-    for (const n of phrase.notes) {
-      makePiano(ctx, parts.pianoDest, n.note, n.peak, start + n.at);
-    }
-    for (const b of phrase.bells) {
-      later(b.at * 1000, () => {
-        if (ctx && !muted) makeBell(ctx, parts.bellDest, b.note, b.peak);
-      });
-    }
-
-    const span = phrase.beats * BEAT * 1000;
-
-    // The chord moves on a phrase boundary, every two phrases. It used to move
-    // on a timer of its own running against the piano's, which put chord
-    // changes in the middle of phrases — the one place harmony must not move,
-    // because a melody note chosen for the old chord is still ringing when the
-    // new one arrives under it.
-    phrasesHeld++;
-    if (phrasesHeld >= 2) {
-      phrasesHeld = 0;
-      later(span - 120, advanceHarmony);
-    }
-
-    later(span, schedulePhrase);
-  }
-
-  /**
-   * Harp figures. The one part of the score that plays in time with itself.
-   *
-   * Notes come in short rising or falling runs rather than singly, because two
-   * notes a second apart are two events and five notes a fifth of a second
-   * apart are a phrase, and a phrase is what the ear accepts as music. The run
-   * is drawn from the chord, so it stays consonant with whatever the pads and
-   * strings are holding, and the spacing is uneven so it reads as played rather
-   * than sequenced.
-   */
-  function scheduleHarp() {
-    if (!ctx || muted) {
-      later(5000, scheduleHarp);
-      return;
-    }
-    const chord = PROGRESSION[chordIndex];
-    // Follows the familiar stems and the sense of scale, which means it thins
-    // out rather than stopping as you go somewhere strange: a black hole still
-    // carries some awe and some deep, so a few notes reach it. The one place it
-    // genuinely falls silent is a mix that is nothing but void, where there is
-    // no stem left for it to play into.
-    const present = mix.home + mix.land * 0.9 + mix.approach * 0.8
-      + mix.deep * 0.6 + mix.leave * 0.6 + mix.awe;
-    if (present > 0.2) {
-      const strength = clamp(present, 0, 1.6);
-      const tones = pick(chord.full, 57, 88, 7);
-      const run = 3 + ((Math.random() * 3) | 0);
-      const from = (Math.random() * Math.max(tones.length - run, 1)) | 0;
-      const rising = Math.random() < 0.6;
-      let when = 0;
-      for (let i = 0; i < run; i++) {
-        const note = tones[from + (rising ? i : run - 1 - i)] ?? tones[from];
-        // Later notes in a run are played more lightly, the way a hand relaxes
-        // across a gesture.
-        const peak = (0.03 - i * 0.004) * strength;
-        later(when, () => {
-          if (ctx && !muted) makePluck(ctx, parts.harpDest, note, Math.max(peak, 0.008));
-        });
-        when += 150 + Math.random() * 170;
+    while (current && current.nextAt < now + LOOKAHEAD) {
+      // A throttled timer can come back late. Carry on from now rather than
+      // writing every missed bar into the same instant.
+      if (current.nextAt < now - 0.1) current.nextAt = now + 0.05;
+      const bar = current.plan.bars[current.index];
+      playBar(bar, current.nextAt);
+      current.nextAt += bar.length;
+      current.index++;
+      if (current.index >= current.plan.bars.length) {
+        const [lo, hi] = (MOODS[current.plan.mood] ?? MOODS.home).gap;
+        restFrom = current.nextAt;
+        restUntil = current.nextAt + lo + Math.random() * (hi - lo);
+        current = null;
       }
     }
-    // Much rarer and much quieter than it was. The harp was added to give the
-    // beds an attack to hold on to, and now that a piano is playing that job is
-    // taken; at the old rate two plucked instruments trade runs over each other
-    // and the piano stops sounding like the lead.
-    later(14000 + Math.random() * 16000, scheduleHarp);
-  }
-
-  function scheduleShimmer() {
-    if (!ctx || muted) {
-      later(6000, scheduleShimmer);
-      return;
-    }
-    const chord = PROGRESSION[chordIndex];
-    const space = mix.deep + mix.leave * 0.6 + mix.approach * 0.5 + mix.awe * 0.8;
-    if (space > 0.18) {
-      const high = pick(chord.full, 72, 96, 6);
-      makeShimmer(ctx, parts.shimmerDest, high[(Math.random() * high.length) | 0],
-        0.012 + Math.min(space, 1.6) * 0.014);
-    }
-    later(5000 + Math.random() * 11000, scheduleShimmer);
   }
 
   function build() {
     master = ctx.createGain();
     master.gain.value = muted ? 0 : LEVEL;
 
-    // Warmth without muffling. The old chain put a lowpass at 1650 Hz across
-    // everything, which is why shimmer and choir could not be heard: they live
-    // above it. A shelf that tilts the top down a few decibels does the warming
-    // instead, and the lowpass sits up at 13 kHz where it only removes the
-    // brittleness of digital sawtooths.
-    // Below about 20 Hz there is nothing to hear, only headroom to lose and DC
-    // for the saturators to turn into offset. This is the only high-pass in the
-    // chain and it is deliberately below the lowest note in the score.
-    const rumble = ctx.createBiquadFilter();
-    rumble.type = 'highpass';
-    rumble.frequency.value = 20;
-    rumble.Q.value = 0.7;
+    // How present the music is at all. Only reaches zero when every scene
+    // weight does, which is how the score is silenced from outside.
+    parts.presence = ctx.createGain();
+    parts.presence.gain.value = 1;
 
+    /*
+     Tape. A few cents of slow pitch wander and a trace of flutter across the
+     whole mix, reverb included. It is the quality that makes this kind of
+     score sound remembered rather than played — a piano that is perfectly
+     steady sounds like a demonstration of a piano.
+     */
+    const tape = ctx.createDelay(0.1);
+    tape.delayTime.value = 0.015;
+    lfo(ctx, tape.delayTime, { rate: 0.43, depth: 0.0007 });
+    lfo(ctx, tape.delayTime, { rate: 0.067, depth: 0.0011, phase: 1.3 });
+    lfo(ctx, tape.delayTime, { rate: 5.3, depth: 0.000018, phase: 0.4 });
+
+    const warmth = ctx.createBiquadFilter();
+    warmth.type = 'lowshelf';
+    warmth.frequency.value = 220;
+    warmth.gain.value = 1.5;
     const tilt = ctx.createBiquadFilter();
     tilt.type = 'highshelf';
-    tilt.frequency.value = 3800;
-    tilt.gain.value = -5.5;
+    tilt.frequency.value = 4200;
+    tilt.gain.value = -3;
     const air = ctx.createBiquadFilter();
     air.type = 'lowpass';
-    air.frequency.value = 13000;
+    air.frequency.value = 11000;
     air.Q.value = 0.6;
-    // Only here to stop stem sums adding up past the ceiling. The attack is
-    // deliberately far slower than a piano note's, so the compressor rides the
-    // average and never grabs an individual strike — when the score was all
-    // sustain that did not matter, and now that it is all transient it is the
-    // difference between a piano and a piano behind a pumping door.
+    const rumble = ctx.createBiquadFilter();
+    rumble.type = 'highpass';
+    rumble.frequency.value = 28;
+    rumble.Q.value = 0.7;
+
+    // Slow enough that it rides the level of a passage and never grabs an
+    // individual note.
     const glue = ctx.createDynamicsCompressor();
     glue.threshold.value = -20;
-    glue.knee.value = 22;
-    glue.ratio.value = 2.2;
-    glue.attack.value = 0.35;
-    glue.release.value = 1.4;
+    glue.knee.value = 20;
+    glue.ratio.value = 2;
+    glue.attack.value = 0.3;
+    glue.release.value = 1.2;
 
-    // A hard ceiling, so no combination of stems can ever clip however the
-    // weights are driven. A waveshaper clamps its input to ±1, so the signal is
-    // scaled down by four first and the curve shaped over that range: the result
-    // is unity gain below about -12 dBFS, under a decibel of compression at -6,
-    // and an asymptote at -0.4 dBFS that cannot be exceeded. On material with no
-    // transients this is inaudible until it is genuinely needed.
+    // A hard ceiling: unity below about -12 dBFS and an asymptote just under
+    // full scale, so nothing the arrangement does can clip.
     const trim = ctx.createGain();
     trim.gain.value = 0.25;
     const ceiling = ctx.createWaveShaper();
@@ -1335,182 +1019,62 @@ export function createAmbient({ context = null, autoResume = true, schedule = tr
     const makeup = ctx.createGain();
     makeup.gain.value = 0.95;
 
-    master.connect(rumble);
-    rumble.connect(tilt);
+    parts.presence.connect(tape);
+    tape.connect(rumble);
+    rumble.connect(warmth);
+    warmth.connect(tilt);
     tilt.connect(air);
     air.connect(glue);
-    glue.connect(trim);
+    glue.connect(master);
+    master.connect(trim);
     trim.connect(ceiling);
     ceiling.connect(makeup);
     makeup.connect(ctx.destination);
 
-    // Two spaces, not one. The short one gives every voice a room to stand in so
-    // nothing sounds dry and synthetic; the long one is the sense of scale, and
-    // only the things that should sound distant are sent much of it.
+    // A room for the piano to stand in, and a hall for distance. How much of
+    // the hall it gets is the one thing that follows the camera continuously.
     const room = ctx.createConvolver();
-    room.buffer = reverbImpulse(ctx, { seconds: 2.4, decay: 2.2, damp: 0.55, preDelay: 0.012 });
+    room.buffer = reverbImpulse(ctx, { seconds: 2.2, decay: 2.4, damp: 0.5, preDelay: 0.01 });
     const roomSend = ctx.createGain();
-    roomSend.gain.value = 0.5;
+    roomSend.gain.value = 0.32;
     const roomOut = ctx.createGain();
-    roomOut.gain.value = 0.55;
+    roomOut.gain.value = 0.6;
     roomSend.connect(room);
     room.connect(roomOut);
-    roomOut.connect(master);
+    roomOut.connect(parts.presence);
 
     const hall = ctx.createConvolver();
-    hall.buffer = reverbImpulse(ctx, { seconds: 11, decay: 3.1, damp: 0.34, preDelay: 0.06 });
-    const hallSend = ctx.createGain();
-    hallSend.gain.value = 0.5;
+    hall.buffer = reverbImpulse(ctx, { seconds: 9, decay: 3, damp: 0.32, preDelay: 0.05 });
+    parts.hallSend = ctx.createGain();
+    parts.hallSend.gain.value = 0.3;
     const hallOut = ctx.createGain();
-    hallOut.gain.value = 0.62;
-    hallSend.connect(hall);
+    hallOut.gain.value = 0.55;
+    parts.hallSend.connect(hall);
     hall.connect(hallOut);
-    hallOut.connect(master);
+    hallOut.connect(parts.presence);
 
     const dry = ctx.createGain();
-    dry.gain.value = 0.62;
-    dry.connect(master);
+    dry.gain.value = 0.8;
+    dry.connect(parts.presence);
 
-    // How much of each stem goes to the long tail. Home and land are close and
-    // personal; deep space and the void are enormous.
-    const HALL = {
-      home: 0.3, leave: 0.6, deep: 0.95, approach: 0.7,
-      land: 0.34, alien: 0.75, void: 0.9, wonder: 0.85,
-    };
-    for (const name of STEM_NAMES) {
-      const g = ctx.createGain();
-      g.gain.value = name === 'home' ? 0.95 : 0;
-      g.connect(dry);
-      g.connect(roomSend);
-      const toHall = ctx.createGain();
-      toHall.gain.value = HALL[name];
-      g.connect(toHall);
-      toHall.connect(hallSend);
-      stems[name] = g;
-    }
+    parts.piano = ctx.createGain();
+    parts.piano.connect(dry);
+    parts.piano.connect(roomSend);
+    parts.piano.connect(parts.hallSend);
 
-    // Home: warm, close, uncomplicated. Nothing here is allowed to sound
-    // synthetic or vast — this is the stem that has to feel like a place.
-    parts.homePad = createPad(ctx, stems.home, {
-      notes: 4, cutoff: 1500, q: 0.9, detune: 5, breathe: 0.3,
-      types: ['sine', 'triangle', 'sine'],
-    });
-    parts.homeSub = createSub(ctx, stems.home);
-    parts.homeStrings = createStrings(ctx, stems.home, { notes: 4 });
-    parts.homeAir = createAir(ctx, stems.home, { freq: 340, q: 0.45 });
-    // Silent. The noise beds were the "background noise still going on": a
-    // filtered hiss under a piano piece has nothing to contribute and is the
-    // first thing you hear when the piano rests. Kept wired up rather than
-    // deleted, because room tone is worth having on a planet surface later and
-    // the graph is the only place that knowledge lives.
-    parts.homeAir.set(0, 6);
+    parts.bell = ctx.createGain();
+    parts.bell.connect(dry);
+    const bellHall = ctx.createGain();
+    bellHall.gain.value = 1.6;
+    parts.bell.connect(bellHall);
+    bellHall.connect(parts.hallSend);
 
-    // Leaving: the same harmony an octave and a half down, through a darker
-    // filter, with the sub coming up. Scale arriving as weight, not as volume.
-    parts.leavePad = createPad(ctx, stems.leave, {
-      notes: 4, cutoff: 620, q: 1.5, detune: 11, breathe: 0.4,
-      types: ['sawtooth', 'triangle', 'sine'],
-    });
-    parts.leaveSub = createSub(ctx, stems.leave);
-    parts.leaveStrings = createStrings(ctx, stems.leave, { notes: 4 });
-    parts.leaveAir = createAir(ctx, stems.leave, { freq: 260, q: 0.4, sweep: 0.08 });
-    parts.leaveAir.set(0, 8);
-
-    // Deep space: the widest voicing in the score, the slowest breathing, and
-    // almost nothing happening. The pulse is barely there.
-    parts.deepPad = createPad(ctx, stems.deep, {
-      notes: 5, cutoff: 900, q: 1.2, detune: 9, breathe: 0.55, spread: 0.95,
-      types: ['sine', 'triangle', 'sine'],
-    });
-    parts.deepSub = createSub(ctx, stems.deep);
-    parts.deepStrings = createStrings(ctx, stems.deep, { notes: 4 });
-    parts.deepPulse = createPulse(ctx, stems.deep, { rate: 0.048 });
-    parts.deepAir = createAir(ctx, stems.deep, { freq: 620, q: 0.35, sweep: 0.09 });
-    parts.deepAir.set(0, 10);
-
-    // Approaching: harmony thickens and the choir arrives. Strings swell, they
-    // do not stab — there is no percussion and no acceleration anywhere here.
-    parts.approachPad = createPad(ctx, stems.approach, {
-      notes: 4, cutoff: 1250, q: 1, detune: 8, breathe: 0.3,
-    });
-    parts.approachStrings = createStrings(ctx, stems.approach, { notes: 4 });
-    parts.approachChoir = createChoir(ctx, stems.approach, { notes: 4, level: 0.9 });
-
-    // Landing: close, small, human. Piano and a soft pad, a little wind.
-    parts.landPad = createPad(ctx, stems.land, {
-      notes: 4, cutoff: 1700, q: 0.8, detune: 4, breathe: 0.25, spread: 0.5,
-      types: ['sine', 'triangle', 'sine'],
-    });
-    parts.landSub = createSub(ctx, stems.land);
-    parts.landStrings = createStrings(ctx, stems.land, { notes: 4 });
-    parts.landAir = createAir(ctx, stems.land, { freq: 480, q: 0.6, sweep: 0.1 });
-    parts.landAir.set(0, 7);
-
-    // Alien: in key, but voiced in fourths and fifths with the third missing, so
-    // it is consonant and still unplaceable. The whole stem is detuned by a few
-    // cents against everything else, which beats slowly and is most of why it
-    // feels wrong in a way that is hard to name. Bells rather than piano.
-    parts.alienPad = createPad(ctx, stems.alien, {
-      notes: 5, cutoff: 1100, q: 1.8, detune: 14, breathe: 0.5, spread: 0.9,
-      types: ['triangle', 'sine', 'sawtooth'], bias: 16,
-    });
-    parts.alienSub = createSub(ctx, stems.alien);
-    parts.alienAir = createAir(ctx, stems.alien, { freq: 900, q: 0.8, sweep: 0.12 });
-    parts.alienAir.set(0, 8);
-
-    // The void: sub-bass and slow pulses, and essentially no melody. Loud in the
-    // register nothing else occupies, quiet everywhere else.
-    parts.voidSub = createSub(ctx, stems.void);
-    parts.voidPulse = createPulse(ctx, stems.void, { rate: 0.032 });
-    parts.voidAir = createAir(ctx, stems.void, { freq: 130, q: 0.5, sweep: 0.07 });
-    parts.voidAir.set(0, 9);
-
-    // Wonder: the build. Strings, choir and a high pad, all driven by `awe`, and
-    // the pad squared so it only arrives at the very top — the climax should
-    // feel earned rather than switched on.
-    parts.wonderStrings = createStrings(ctx, stems.wonder, { notes: 4 });
-    parts.wonderChoir = createChoir(ctx, stems.wonder, { notes: 4, level: 1 });
-    parts.wonderPad = createPad(ctx, stems.wonder, {
-      notes: 4, cutoff: 4200, q: 0.7, detune: 6, breathe: 0.35, spread: 1,
-      types: ['sine', 'sine', 'triangle'],
-    });
-
-    // Transient sources are sent to the stems that should carry them, so a
-    // piano note is only audible when the mix is somewhere a piano belongs.
-    // The piano gets its own bus into the master rather than being fanned out
-    // across the stems.
-    //
-    // Routing it through the stems was the obvious way to make it audible
-    // everywhere, and it is wrong: a stem send is multiplied by that stem's
-    // weight, so a voice connected to all eight comes out multiplied by the sum
-    // of the weights. That sum runs from about 1 at home to 2.85 over a moon,
-    // which is a nine decibel swing in how loud the melody is for no musical
-    // reason, and it is why the piano sat under the beds in the two places you
-    // spend the most time and over the top of them everywhere else. One bus
-    // with one gain means the balance is a number I set rather than a side
-    // effect of where the camera is.
-    parts.pianoBus = ctx.createGain();
-    parts.pianoBus.gain.value = 1;
-    // Through the same two spaces every stem uses, not straight to the master.
-    // A piano with no room around it is the one thing that would give away that
-    // this is synthesis, and the long tail is where the sense of scale lives.
-    parts.pianoBus.connect(dry);
-    parts.pianoBus.connect(roomSend);
-    parts.pianoHall = ctx.createGain();
-    parts.pianoHall.gain.value = 0.35;
-    parts.pianoBus.connect(parts.pianoHall);
-    parts.pianoHall.connect(hallSend);
-    parts.pianoDest = ctx.createGain();
-    parts.pianoDest.connect(parts.pianoBus);
-    parts.bellDest = ctx.createGain();
-    parts.bellDest.connect(stems.alien);
-    parts.shimmerDest = ctx.createGain();
-    parts.shimmerDest.connect(stems.deep);
-    parts.shimmerDest.connect(stems.wonder);
-    // The harp shares the piano's bus, for the same reason and so the two
-    // plucked voices keep a fixed balance with each other wherever you are.
-    parts.harpDest = ctx.createGain();
-    parts.harpDest.connect(parts.pianoBus);
+    parts.pad = ctx.createGain();
+    parts.pad.connect(dry);
+    const padHall = ctx.createGain();
+    padHall.gain.value = 1.4;
+    parts.pad.connect(padHall);
+    padHall.connect(parts.hallSend);
   }
 
   async function start() {
@@ -1521,12 +1085,10 @@ export function createAmbient({ context = null, autoResume = true, schedule = tr
     started = true;
     if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
     build();
-    voiceHarmony();
-    if (schedule) {
-      later(600, schedulePhrase);
-      later(6000, scheduleShimmer);
-      later(1800, scheduleHarp);
-    }
+    // The first piece begins almost at once, so turning the music on is heard
+    // to have done something.
+    restUntil = ctx.currentTime + 2;
+    if (schedule) later(300, tick);
     lastApply = -1e9;
     apply();
     if (autoResume && ctx.state === 'suspended') await ctx.resume();
@@ -1534,46 +1096,13 @@ export function createAmbient({ context = null, autoResume = true, schedule = tr
 
   function apply() {
     const now = ctx.currentTime;
-    for (const name of STEM_NAMES) {
-      const g = stems[name];
-      if (!g) continue;
-      g.gain.cancelScheduledValues(now);
-      // Long enough that no move between places is ever heard as a cut, short
-      // enough that arriving somewhere new is felt while you are still arriving.
-      g.gain.setTargetAtTime(clamp(mix[name] ?? 0, 0, 1), now, 4.5 * glideScale);
-    }
-
-    // The piano's own level. It barely moves — the melody should not duck and
-    // swell as you fly around, which is exactly what fanning it across the
-    // stems used to do. All that changes is a little lift where the score wants
-    // to be playing to you and a little restraint out in the empty places,
-    // where the writing already thins itself out.
-    if (parts.pianoBus) {
-      const near = clamp(mix.home + mix.land + mix.approach * 0.7, 0, 1.4);
-      const empty = clamp(mix.deep * 0.7 + mix.void, 0, 1.4);
-      // Its own bus means the stem gains are no longer in front of it, so
-      // taking every stem to zero would leave the piano playing on alone. That
-      // is not a hypothetical: it is how the score is silenced. Presence brings
-      // it down with the rest of the mix, but reaches full well before any real
-      // scene does, so the level stays flat everywhere you can actually be.
-      const total = STEM_NAMES.reduce((sum, n) => sum + clamp(mix[n] ?? 0, 0, 1), 0);
-      const presence = clamp(total / 0.3, 0, 1);
-      const level = clamp(0.92 + near * 0.16 - empty * 0.22, 0.6, 1.15) * presence;
-      parts.pianoBus.gain.cancelScheduledValues(now);
-      parts.pianoBus.gain.setTargetAtTime(level, now, 4.5 * glideScale);
-    }
-    // How much room the piano is playing in. Close to home it is a room; out in
-    // deep space and over a black hole it is the long tail, which is the only
-    // thing in the score that still says "vast" now that the drones are gone.
-    if (parts.pianoHall) {
-      const vast = clamp(mix.deep * 0.8 + mix.void + mix.leave * 0.5
-        + mix.awe * 0.6 + mix.alien * 0.5, 0, 1.6);
-      parts.pianoHall.gain.cancelScheduledValues(now);
-      parts.pianoHall.gain.setTargetAtTime(clamp(0.3 + vast * 0.45, 0.3, 1),
-        now, 4.5 * glideScale);
-    }
-
-    voiceHarmony();
+    parts.presence.gain.cancelScheduledValues(now);
+    parts.presence.gain.setTargetAtTime(presenceOf(mix), now, 4.5 * glideScale);
+    // Further away in empty places: the same piano, heard across a larger room.
+    const vast = clamp(mix.deep * 0.8 + mix.void + mix.leave * 0.5
+      + mix.awe * 0.6 + mix.alien * 0.5, 0, 1.6);
+    parts.hallSend.gain.cancelScheduledValues(now);
+    parts.hallSend.gain.setTargetAtTime(clamp(0.22 + vast * 0.38, 0.22, 0.8), now, 4.5 * glideScale);
   }
 
   function updateScene(next) {
@@ -1586,11 +1115,16 @@ export function createAmbient({ context = null, autoResume = true, schedule = tr
   }
 
   function setMuted(value) {
+    const was = muted;
     muted = value;
     if (master && ctx) {
       const now = ctx.currentTime;
       master.gain.cancelScheduledValues(now);
       master.gain.setTargetAtTime(muted ? 0 : LEVEL, now, 0.35);
+      // Turned off mid-piece, the piece is abandoned; turned back on, a new one
+      // starts shortly rather than resuming halfway through a phrase.
+      if (muted) current = null;
+      else if (was) restUntil = ctx.currentTime + 1.5;
     }
     if (!muted) start();
   }
@@ -1609,46 +1143,32 @@ export function createAmbient({ context = null, autoResume = true, schedule = tr
     updateScene,
     dispose,
     get muted() { return muted; },
-    // Exposed for the offline render test, which drives the graph without a
-    // wall clock and needs to place the harmony and the transients by hand.
+    // For the offline render tests, which have no wall clock and place the
+    // music themselves.
     _internals: {
       get ctx() { return ctx; },
       get parts() { return parts; },
-      get stems() { return stems; },
-      chords: PROGRESSION,
-      setChord(i) { chordIndex = i % PROGRESSION.length; voiceHarmony(); },
+      pieces: [...LIBRARY.keys()],
+      errors: PIECE_ERRORS,
+      moods: Object.fromEntries(Object.entries(MOODS).map(([k, v]) => [k, v.pieces])),
       setGlideScale(v) { glideScale = v; },
-      /** Fire one transient now, so the test can place them at known times. */
-      strike(kind, note, peak) {
-        if (kind === 'piano') makePiano(ctx, parts.pianoDest, note, peak);
-        if (kind === 'bell') makeBell(ctx, parts.bellDest, note, peak);
-        if (kind === 'shimmer') makeShimmer(ctx, parts.shimmerDest, note, peak);
-        if (kind === 'harp') makePluck(ctx, parts.harpDest, note, peak);
-      },
-      /**
-       * Write one phrase of the piano part into an offline render at `at`
-       * seconds, and report how long it runs for.
-       *
-       * The offline test has no wall clock, so the live scheduler never fires in
-       * it. Without this the render measures the beds alone — which is how a
-       * score whose piano had gone quiet everywhere but two stems could still
-       * pass every level check it had. The test now hears the same notes the
-       * player does, because both come out of `planPhrase`.
-       */
-      renderPhrase(at) {
-        const phrase = planPhrase();
-        for (const n of phrase.notes) {
-          makePiano(ctx, parts.pianoDest, n.note, n.peak, at + n.at);
+      mood() { return moodOf(mix); },
+      /** Arrange a piece without playing it, to read what would be played. */
+      planPiece(name, mood) { return arrange(choose(mood ?? moodOf(mix), name), mood ?? moodOf(mix)); },
+      /** Write a whole piece into the context starting at `at` seconds. */
+      renderPiece(name, at = 0) {
+        const mood = moodOf(mix);
+        const plan = arrange(choose(mood, name), mood);
+        let t = at;
+        for (const bar of plan.bars) {
+          playBar(bar, t);
+          t += bar.length;
         }
-        return phrase;
+        return { name: plan.name, mood, duration: t - at };
       },
-      /** Write a phrase without playing it, to inspect what was composed. */
-      planPhrase() { return planPhrase(); },
-      /** Advance the progression on the phrase grid, for offline renders. */
-      nextChord() { advanceHarmony(); },
       /** Jump straight to a mix, for offline rendering where time does not pass. */
       snap(next) {
-        mix = { ...mix, ...next };
+        mix = { ...Object.fromEntries(Object.keys(mix).map((k) => [k, 0])), ...next };
         lastApply = -1e9;
         apply();
       },
