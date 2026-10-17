@@ -987,7 +987,7 @@ export class Cosmos {
       spin: 0.5 + (galaxy.seed % 50) / 100,
       inclinationDeg: 20 + (galaxy.seed % 60),
       jet: galaxy.morph < 0.6 && massSol > 5e8 ? 1 : 0,
-      ...holeLook(mulberry((galaxy.seed ^ 0x4b1d) >>> 0)),
+      ...holeLook(mulberry((galaxy.seed ^ 0x4b1d) >>> 0), { core: true }),
       world: galaxy.center.clone(),
       generated: true,
     };
@@ -1047,13 +1047,38 @@ export class Cosmos {
  * bright quasar-like glare, or a starved one that is almost only its shadow
  * and the stars it bends.
  */
-function holeLook(random) {
+/**
+ * How a generated hole is being fed. A galaxy's central hole can be a quasar,
+ * drowning its host in light and throwing a jet, or starved and visible only
+ * by what it does to the light behind it; a stellar one more often has a small,
+ * tight disk stripped from a companion than a wide one.
+ */
+function holeLook(random, { core = false } = {}) {
   const roll = random();
-  const brightness = roll < 0.12 ? 0.08 + random() * 0.1 : roll < 0.3 ? 1.5 + random() * 0.8 : 0.5 + random() * 0.9;
+  if (core && roll < 0.12) {
+    return {
+      activity: 'Quasar', brightness: 3.5 + random() * 2.5, jet: 1,
+      diskOuterRs: 18 + random() * 12, tempScale: 1.6 + random() * 1.0,
+    };
+  }
+  if (roll < (core ? 0.27 : 0.15)) {
+    return {
+      activity: 'Dormant', brightness: 0.02 + random() * 0.05, jet: 0,
+      diskOuterRs: 7 + random() * 6, tempScale: 0.4 + random() * 0.5,
+    };
+  }
+  if (!core && roll < 0.42) {
+    return {
+      activity: 'Compact disk', brightness: 0.9 + random() * 1.2,
+      diskOuterRs: 5 + random() * 4, tempScale: 0.8 + random() * 1.8,
+    };
+  }
+  const bright = roll > 0.8;
   return {
-    brightness,
+    activity: bright ? 'Bright disk' : 'Accreting',
+    brightness: bright ? 1.5 + random() * 0.8 : 0.5 + random() * 0.9,
     diskOuterRs: 9 + random() * 17,
-    tempScale: 0.45 + random() * 1.3,
+    tempScale: 0.35 + random() * 2.2,
   };
 }
 

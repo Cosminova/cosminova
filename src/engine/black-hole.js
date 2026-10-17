@@ -3,6 +3,8 @@ import {
   BackSide,
   Color,
   Group,
+  Matrix3,
+  Matrix4,
   Mesh,
   PlaneGeometry,
   ShaderMaterial,
@@ -17,6 +19,9 @@ import { pointGlare, pointVisibility } from './star.js';
 
 /** Schwarzschild radius of one solar mass, km. */
 export const RS_KM_PER_SOL = 2.953;
+
+/** The render layer hole volumes live on, so the main pass leaves them out. */
+export const BLACK_HOLE_LAYER = 2;
 
 /**
  * Catalogued holes at measured sky positions. Masses set the event-horizon
@@ -112,8 +117,32 @@ const VOLUME_FRAGMENT = /* glsl */ `
   uniform float uCoreTempK;
   uniform float uRimTempK;
   uniform float uDiskOut;  // rs, outer edge of the disk
+  uniform sampler2D tBehind;   // the frame as drawn before any hole, linear HDR
+  uniform float uLens;
+  uniform mat3 uLocalToView;
+  uniform mat4 uProjection;
 
   varying vec3 vLocal;
+
+  /**
+   * What lies behind the hole along a bent ray, read back from the frame
+   * already drawn: the escaped direction is projected to the screen, so the
+   * stars, galaxies and planets behind are smeared into arcs and an Einstein
+   * ring by the same geodesics that draw the disk.
+   */
+  vec3 behind(vec3 dirLocal) {
+    vec3 v = uLocalToView * dirLocal;
+    vec4 clip = uProjection * vec4(v, 0.0);
+    clip.w = abs(clip.w) < 1e-6 ? 1e-6 : clip.w;
+    // Strongly bent rays leave the frame, and from close up most of them do.
+    // A starfield is much the same in every direction, so the frame is read
+    // mirrored back into itself there: wrong in detail, but it keeps stars in
+    // the arcs around the shadow instead of a black annulus where the copy
+    // ran out.
+    vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+    uv = 1.0 - abs(1.0 - mod(uv, 2.0));
+    return texture2D(tBehind, clamp(uv, 0.001, 0.999)).rgb;
+  }
 
   const float R_IN = 2.6;      // rs, inner edge of the disk
   const float BOUND = 55.0;    // rs, the mesh this is drawn on
@@ -177,12 +206,16 @@ const VOLUME_FRAGMENT = /* glsl */ `
    * edge to its rim, while a supermassive one is cool enough to keep amber at
    * the outside. See the temperatures worked out in the constructor.
    */
-  vec3 diskColour(float rho) {
+  vec3 diskColour(float rho, float shift) {
     float ramp = pow(clamp(R_IN / max(rho, R_IN), 0.0, 1.0), 0.75);
-    float kelvin = mix(uRimTempK, uCoreTempK, ramp);
+    float kelvin = mix(uRimTempK, uCoreTempK, pow(ramp, 1.6)) * shift;
+    vec3 c = blackbody(kelvin);
+    // The tone curve pulls bright colours towards white; this puts back what
+    // it takes, so a 4000 K rim still reads as amber once it is exposed.
+    c = max(mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, 1.45), 0.0);
     // Hotter annuli are brighter too. Stefan-Boltzmann's fourth power would
     // leave nothing visible but the innermost ring, so this is much gentler.
-    return blackbody(kelvin) * (0.75 + 0.85 * pow(ramp, 0.5));
+    return c * (0.22 + 1.6 * ramp * ramp * ramp);
   }
 
   void main() {
@@ -200,6 +233,7 @@ const VOLUME_FRAGMENT = /* glsl */ `
     float root = sqrt(disc);
     float tStart = max(-bDot - root, 0.0);
     vec3 p = ro + rd * tStart;
+    vec3 rd0 = rd;
 
     // Conserved along the geodesic, so it is computed once rather than per step.
     float h2 = dot(cross(p, rd), cross(p, rd));
@@ -230,11 +264,19 @@ const VOLUME_FRAGMENT = /* glsl */ `
           // stops the pattern from turning as a rigid wheel.
           float omega = 0.7 / pow(rho, 1.5);
           float u = phi / 6.2831853 + uTime * omega;
-          float bands = ringNoise(vec2(u * 26.0, rho * 1.7), 26.0) * 0.55
-                      + ringNoise(vec2(u * 61.0, rho * 4.1), 61.0) * 0.3;
-          float dens = smoothstep(uDiskOut, uDiskOut * 0.45, rho)
-                     * smoothstep(R_IN, R_IN * 1.35, rho)
-                     * (0.55 + 0.9 * bands);
+          // Turbulence in log-radius, wound into trailing spirals by the same
+          // shear: long thin filaments rather than the concentric grooves of a
+          // record, which is what a disk looks like when its structure is
+          // drawn as rings.
+          float lr = log(rho);
+          float wind = lr * 5.5;
+          float fil = ringNoise(vec2(u * 12.0 + wind * 2.0, lr * 6.0), 12.0) * 0.5
+                    + ringNoise(vec2(u * 28.0 + wind * 4.7, lr * 15.0), 28.0) * 0.3
+                    + ringNoise(vec2(u * 64.0 + wind * 10.8, lr * 34.0), 64.0) * 0.2;
+          fil = smoothstep(0.15, 0.95, fil);
+          float dens = smoothstep(uDiskOut, uDiskOut * 0.35, rho)
+                     * smoothstep(R_IN * 0.92, R_IN * 1.25, rho)
+                     * (0.45 + 0.85 * fil);
 
           // Orbital speed as a fraction of c for a circular orbit, and the
           // beaming it produces. This is the asymmetry that makes one side of
@@ -247,13 +289,15 @@ const VOLUME_FRAGMENT = /* glsl */ `
           // Light climbing out of the well arrives redder and fainter.
           float grav = sqrt(max(1.0 - 1.0 / rho, 0.02));
           float g = clamp(boost * grav, 0.05, 5.5);
+          // The observed temperature is the emitted one times the frequency
+          // shift, so the approaching side is bluer as well as brighter and
+          // the receding side goes amber.
+          float shift = clamp(pow(boost, 1.0 / 3.0) * grav, 0.35, 2.2);
 
-          // Scaled so the rim sits below white and only the beamed inner edge
-          // clips. A real disc outshines this by orders of magnitude, but drive
-          // the whole annulus past one and every channel saturates together:
-          // the temperature gradient is there in the numbers and invisible on
-          // screen, and the hole reads as a white smear whatever its mass.
-          vec3 emit = diskColour(rho) * dens * g * uBrightness * 0.42;
+          // The beamed inner edge runs well past one and blooms; the rim stays
+          // under it, so the temperature gradient survives the tone curve
+          // instead of the whole annulus saturating to one white smear.
+          vec3 emit = diskColour(rho, shift) * dens * g * uBrightness * 0.6;
           colour += emit * (1.0 - alpha);
           alpha += clamp(dens * 0.7, 0.0, 1.0) * (1.0 - alpha);
         }
@@ -273,7 +317,7 @@ const VOLUME_FRAGMENT = /* glsl */ `
         float flicker = 0.7 + 0.3 * noise(vec2(height * 0.5 - uTime * 1.1, rho * 0.8));
         float jet = sheath * along * flicker;
         if (jet > 0.001) {
-          colour += vec3(0.55, 0.78, 1.3) * jet * 0.5 * uBrightness * step * (1.0 - alpha);
+          colour += vec3(0.55, 0.78, 1.3) * jet * 0.28 * sqrt(uBrightness) * step * (1.0 - alpha);
           alpha += jet * step * 0.02 * (1.0 - alpha);
         }
       }
@@ -281,10 +325,18 @@ const VOLUME_FRAGMENT = /* glsl */ `
       p = next;
     }
 
+    // The march stops at the bounding sphere, where a real ray is still bent by
+    // a couple of degrees; easing the bend to nothing towards the edge keeps the
+    // lensed image continuous with the unlensed sky around it.
+    float lensing = uLens * smoothstep(BOUND * 0.92, BOUND * 0.45, sqrt(h2));
+
     if (captured) {
       // Anything in front of the hole is still seen; the horizon behind it is
       // not, so this is opaque black plus whatever the ray picked up on the way.
       gl_FragColor = vec4(colour, 1.0);
+    } else if (lensing > 0.001) {
+      vec3 bg = behind(normalize(mix(rd0, rd, lensing)));
+      gl_FragColor = vec4(colour + bg * (1.0 - clamp(alpha, 0.0, 1.0)), 1.0);
     } else {
       if (alpha < 0.002) discard;
       gl_FragColor = vec4(colour, clamp(alpha, 0.0, 1.0));
@@ -352,8 +404,8 @@ export class BlackHole {
     // here is the ordering rather than the absolute value — the smallest holes
     // come out blue-white throughout, the largest keep an amber rim.
     const hot = Math.pow(21 / Math.max(spec.massSol, 1), 0.25) ** 0.55 * (spec.tempScale ?? 1);
-    this.coreTempK = 9000 + 21000 * hot;
-    this.rimTempK = 2400 + 5200 * hot;
+    this.coreTempK = 4600 + 6500 * hot;
+    this.rimTempK = 1700 + 1700 * hot;
     this.outerKm = this.rs * 55;
     this.world = blackHoleWorld(spec);
     this.group = new Group();
@@ -373,6 +425,10 @@ export class BlackHole {
         uCoreTempK: { value: this.coreTempK },
         uRimTempK: { value: this.rimTempK },
         uDiskOut: { value: spec.diskOuterRs ?? 24 },
+        tBehind: { value: null },
+        uLens: { value: 0 },
+        uLocalToView: { value: new Matrix3() },
+        uProjection: { value: new Matrix4() },
       },
       vertexShader: VOLUME_VERTEX,
       fragmentShader: VOLUME_FRAGMENT,
@@ -383,6 +439,16 @@ export class BlackHole {
     this.mesh = new Mesh(geometry, this.material);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 4;
+    // Drawn in a pass of its own after everything else, from a copy of the
+    // frame without it; see the lensing pass in space.js.
+    this.mesh.layers.set(BLACK_HOLE_LAYER);
+    const modelView = new Matrix4();
+    this.mesh.onBeforeRender = (renderer, scene, camera) => {
+      const u = this.material.uniforms;
+      modelView.multiplyMatrices(camera.matrixWorldInverse, this.mesh.matrixWorld);
+      u.uLocalToView.value.setFromMatrix4(modelView);
+      u.uProjection.value.copy(camera.projectionMatrix);
+    };
     this.group.add(this.mesh);
 
     /*
@@ -411,7 +477,16 @@ export class BlackHole {
     this.glare.frustumCulled = false;
     this.glare.renderOrder = 20;
     this.group.add(this.glare);
-    this.luminositySol = eddingtonLuminositySol(spec.massSol);
+    // A quasar outshines its whole galaxy; a starved hole puts out next to
+    // nothing and is found only by its lensing.
+    this.luminositySol = eddingtonLuminositySol(spec.massSol) * (spec.brightness ?? 1) ** 2
+      * (spec.activity === 'Quasar' ? 40 : 1);
+  }
+
+  /** Hands the shader the frame drawn before it, to bend. */
+  setBehind(texture) {
+    this.material.uniforms.tBehind.value = texture;
+    this.material.uniforms.uLens.value = texture ? 1 : 0;
   }
 
   /**

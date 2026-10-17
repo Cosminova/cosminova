@@ -70,6 +70,11 @@ function specFromPlanet(entry, described, hostKey) {
     craterDepth: described.craterDepth,
     craterDensity: described.craterDensity,
     roughness: described.roughness,
+    // Continents, ranges and hills, relatively taller on a small world the way
+    // Mars stands higher for its size than Earth. The ridged swell under them
+    // is turned down: flooded on its own it filled into round pools.
+    terrain: gaseous ? 0 : clamp(0.0024 * Math.sqrt(6371 / described.radiusKm), 0.0012, 0.006),
+    macroRelief: gaseous ? 0 : 0.0012,
     // How large the surface provinces are: a world of a few continents or one
     // of many islands.
     paletteFreq: gaseous ? 2.2 : described.provinceScale,
@@ -137,6 +142,7 @@ function specFromMoon(entry, described, parentKey) {
     craterDepth: (radiusKm < 200 ? 0.3 : 0.22) * (0.7 + described.craterDepth * 1.6),
     craterDensity: radiusKm < 200 ? 0.85 : 0.6,
     roughness: radiusKm < 200 ? 0.32 : 0.22,
+    terrain: radiusKm > 300 ? 0.0016 : 0,
     photometry: 1,
     albedoBoost: 1.35,
     iceLatitude: described.icecapLatitude,

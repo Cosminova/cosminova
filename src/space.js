@@ -23,12 +23,14 @@ import {
   WebGLRenderer,
   WebGLRenderTarget,
   Vector4,
+  ShaderMaterial,
 } from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { FullScreenQuad, Pass } from 'three/addons/postprocessing/Pass.js';
 
 import { loadSpaceData } from './data.js';
 import { createMilkyWay, ECLIPTIC_OBLIQUITY } from './milkyway.js';
@@ -50,7 +52,7 @@ import { OrbitApproachControls } from './engine/camera-controls.js';
 import { DeepField } from './engine/deep-field.js';
 import { ExoSystem, exoKey, teffToBv } from './engine/exo-system.js';
 import { inventBlackHoleSystems, inventGalaxySystems } from './engine/generated.js';
-import { BlackHole, BLACK_HOLES } from './engine/black-hole.js';
+import { BlackHole, BLACK_HOLES, BLACK_HOLE_LAYER } from './engine/black-hole.js';
 import { buildColorLookup, colorIndexToLinearRgb } from './color.js';
 import { describeStar, spectralTemperature, starLook, starTint, surfaceBrightness, SOLAR_TEFF } from './engine/stellar.js';
 import { hashName } from './engine/classify.js';
@@ -1659,8 +1661,49 @@ const sanitizePass = new ShaderPass({
       gl_FragColor = vec4(rgb, isnan(c.a) ? 1.0 : c.a);
     }`,
 });
+/*
+ * Black holes bend the light of everything behind them, so they are drawn
+ * last: the frame so far is copied aside, and each hole's rays read their
+ * background from that copy in the direction they escape. Drawn into the
+ * same buffer as the main pass, so its depth still hides a hole behind a
+ * planet. Both passes idle when no hole is big enough on screen to draw.
+ */
+const behindTarget = new WebGLRenderTarget(1, 1, { type: HalfFloatType, depthBuffer: false });
+const copyMaterial = new ShaderMaterial({
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: 'uniform sampler2D tDiffuse; varying vec2 vUv; void main() { gl_FragColor = texture2D(tDiffuse, vUv); }',
+  depthTest: false,
+  depthWrite: false,
+});
+const copyQuad = new FullScreenQuad(copyMaterial);
+const holePass = new (class extends Pass {
+  constructor() {
+    super();
+    this.needsSwap = false;
+  }
+  setSize(width, height) {
+    behindTarget.setSize(width, height);
+  }
+  render(r, writeBuffer, readBuffer) {
+    copyMaterial.uniforms.tDiffuse.value = readBuffer.texture;
+    r.setRenderTarget(behindTarget);
+    copyQuad.render(r);
+    const mask = camera.layers.mask;
+    const autoClear = r.autoClear;
+    camera.layers.set(BLACK_HOLE_LAYER);
+    r.autoClear = false;
+    r.setRenderTarget(readBuffer);
+    r.render(scene, camera);
+    camera.layers.mask = mask;
+    r.autoClear = autoClear;
+  }
+})();
+holePass.enabled = false;
+
 composer.addPass(skyPass);
 composer.addPass(mainPass);
+composer.addPass(holePass);
 composer.addPass(sanitizePass);
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
@@ -3050,6 +3093,7 @@ function frame(now) {
       shineDir,
       shine,
       tideDir,
+      groundKm: cameraGround.key === key ? cameraGround.km : 0,
     });
 
     for (const override of state.uniformOverrides) {
@@ -3148,6 +3192,10 @@ function frame(now) {
       tmpSunLocal.copy(item.local).negate().normalize();
       tmpViewLocal.copy(tmpViewDir).normalize();
       const au = item.spec.orbitKm / 149597870.7;
+      // As at home: close in, the patch under the camera has its centre well
+      // outside the view cone however much of the screen it fills, and culling
+      // by cone drops the ground you are standing on.
+      const close = item.spec.radiusKm / distance > 0.04;
       patchTotal += item.planet.update({
         cameraLocal: tmpCameraLocal,
         sunLocal: tmpSunLocal.copy(tmpSunLocal),
@@ -3157,8 +3205,9 @@ function frame(now) {
         microDetail: quality.microDetail,
         sunColour,
         sunIntensity: exoSunIntensity(exoFlux(hostLum, au), exoReference, state.exposure),
-        viewLocal: tmpViewLocal,
-        coneCos,
+        viewLocal: close ? null : tmpViewLocal,
+        coneCos: close ? -1 : coneCos,
+        groundKm: cameraGround.key === item.spec.key ? cameraGround.km : 0,
       });
       if (item.rings) {
         const u = item.rings.material.uniforms;
@@ -3187,8 +3236,9 @@ function frame(now) {
         microDetail: quality.microDetail,
         sunColour,
         sunIntensity: exoSunIntensity(exoFlux(hostLum, au), exoReference, state.exposure),
-        viewLocal: tmpViewDir,
-        coneCos,
+        viewLocal: moon.spec.radiusKm / distance > 0.04 ? null : tmpViewDir,
+        coneCos: moon.spec.radiusKm / distance > 0.04 ? -1 : coneCos,
+        groundKm: cameraGround.key === moon.spec.key ? cameraGround.km : 0,
       });
     }
   }
@@ -3313,6 +3363,12 @@ function frame(now) {
 
   renderer.toneMappingExposure = 1;
   dither.advance();
+  let holeDrawn = false;
+  for (const hole of blackHoles.values()) {
+    if (hole.group.visible && hole.mesh.visible) holeDrawn = true;
+    hole.setBehind(behindTarget.texture);
+  }
+  holePass.enabled = holeDrawn;
   composer.render();
 
   smoothedFps = smoothedFps * 0.92 + (1 / Math.max(dt, 1e-4)) * 0.08;

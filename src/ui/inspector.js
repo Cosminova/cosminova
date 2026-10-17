@@ -216,6 +216,7 @@ export function describe(resolved, context = {}) {
     // radii you can actually see the effect of in the render.
     add('Photon sphere', formatDistance(rs * 1.5));
     add('Spin', `a\u002f\u004d = ${num(s.spin, 2)}`);
+    add('Activity', s.activity, true);
     if (s.generated) add('Data', GENERATED, true);
     return {
       title: resolved.name,

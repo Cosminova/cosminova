@@ -298,7 +298,7 @@ const RELIEF_GLSL = /* glsl */ `
     fracture = 0.0;
     fill = 0.0;
     if (uCraterOctaves < 0.05 && uRoughness < 0.001 && uFractureDepth < 0.001 &&
-        uIrregular < 0.001 && uMacroRelief < 0.001 && uBasinDepth < 0.001 &&
+        uIrregular < 0.001 && uMacroRelief < 0.001 && uBasinDepth < 0.001 && uTerrain < 0.00001 &&
         uCrustRelief < 0.001 && uFloodCoverage < 0.001 && uRiftCoverage < 0.001 &&
         uVolcanoCoverage < 0.001) return vec4(0.0);
 
@@ -382,6 +382,41 @@ const RELIEF_GLSL = /* glsl */ `
       float scale = uRadius * uMacroRelief;
       t.x += ridges.x * scale;
       t.yzw += ridges.yzw * 2.2 * scale;
+    }
+    if (uTerrain > 0.00001) {
+      // A world's own geography, for the ones nobody has mapped: continents
+      // from warped noise, so coastlines are ragged rather than round; ridged
+      // ranges standing on the high ground, the way mountains sit on
+      // continents rather than anywhere; and hills underfoot that only appear
+      // once you are low enough to see them. Each layer stops adding octaves
+      // at the pixel, which is what keeps it from shimmering at the limb.
+      float scale = uRadius * uTerrain;
+      vec3 q = d * 1.7 + vec3(mod(uSurfaceSeed * 0.731, 37.0), mod(uSurfaceSeed * 0.419, 41.0), 3.0);
+      vec4 warp = fbmd(q * 1.25 + 11.3, 3, 2.0, 0.5);
+      vec3 qw = q + vec3(warp.x, -warp.x * 0.8, warp.x * 0.6) * 0.6;
+      int lands = int(clamp(log2(0.5 / max(pixelAngle * 1.7, 1e-12)), 2.0, 8.0));
+      vec4 land = fbmd(qw, lands, 2.05, 0.5);
+      t.x += land.x * scale;
+      t.yzw += land.yzw * 1.7 * scale;
+
+      float high = smoothstep(-0.05, 0.3, land.x);
+      float rangeOct = log2(0.5 / max(pixelAngle * 22.0, 1e-12));
+      if (high > 0.001 && rangeOct > 0.5) {
+        vec4 ridges = ridgedd(qw * 13.0 + 5.7, int(clamp(rangeOct, 1.0, 8.0)));
+        float r = scale * 0.55 * high * smoothstep(0.5, 1.5, rangeOct);
+        t.x += (ridges.x - 0.35) * r;
+        t.yzw += ridges.yzw * 13.0 * 1.7 * r;
+      }
+      float hillOct = log2(0.5 / max(pixelAngle * 260.0, 1e-12));
+      if (hillOct > 0.5) {
+        // Gain well under a half, so each finer octave is gentler than the one
+        // before; at a half every octave adds the same slope and the finest
+        // cells shade as separate facets.
+        vec4 hills = fbmd(d * 260.0 + 2.9, int(clamp(hillOct, 1.0, 5.0)), 2.07, 0.36);
+        float r = scale * 0.035 * (0.35 + high) * smoothstep(0.5, 1.5, hillOct);
+        t.x += hills.x * r;
+        t.yzw += hills.yzw * 260.0 * r;
+      }
     }
     if (uIrregular > 0.001) {
       vec4 n1 = noised(d * 1.55 + uSurfaceSeed);
@@ -476,6 +511,7 @@ const SURFACE_UNIFORMS_GLSL = /* glsl */ `
   uniform float uBasinDepth;
   uniform float uRoughness;
   uniform float uMacroRelief;
+  uniform float uTerrain;
   uniform float uIrregular;
   uniform float uSurfaceSeed;
   uniform float uSeaLevelKm;      // 0 for a dry world
@@ -684,6 +720,7 @@ const FRAGMENT = /* glsl */ `
   uniform float uHeatGlow;        // thermal emission of a world hot enough to glow
   uniform vec3 uHeatColour;
   uniform float uMacroRelief;
+  uniform float uTerrain;
   uniform float uIrregular;
   uniform vec3 uAxisScale;
   uniform vec3 uTideDir;
@@ -967,6 +1004,18 @@ const FRAGMENT = /* glsl */ `
     albedo *= 1.0 + fractureDepth * uFractureTint;
 
     float steep = 1.0 - max(dot(normal, dir), 0.0);
+    if (uTerrain > 0.00001 && uHasColourMap < 0.5) {
+      // Height above the shore, in units of the world's relief: bare rock on
+      // the high ground and, on a world cold enough to keep ice caps, snow on
+      // the peaks, thinning off the steepest faces where it cannot lie.
+      float relief = uRadius * uTerrain;
+      float above = (groundKm - max(uSeaLevelKm, 0.0)) / relief + (uSeaLevelKm > 0.0 ? 0.0 : 0.15);
+      vec3 rock = mix(uPaletteC, uPaletteB, 0.45) * 0.85;
+      albedo = mix(albedo, rock, smoothstep(0.22, 0.6, above) * 0.55);
+      float snowline = mix(0.75, 0.42, clamp(abs(dir.y) * 1.2, 0.0, 1.0));
+      float snow = smoothstep(snowline, snowline + 0.12, above) * (1.0 - smoothstep(0.25, 0.6, steep));
+      albedo = mix(albedo, uPaletteD, snow * step(0.01, uIceLatitude) * 0.9);
+    }
     if (uSlopeRock > 0.001) {
       vec3 rock = mix(uPaletteC, uPaletteB, 0.35);
       albedo = mix(albedo, rock, smoothstep(0.08, 0.42, steep) * uSlopeRock);
@@ -1341,6 +1390,9 @@ const SKY_COMMON = /* glsl */ `
   uniform vec3 uCameraLocal;
   uniform float uRadius;
   uniform float uShellRadius;
+  // Height of the ground under the camera above uRadius. The air is drawn
+  // without the terrain's depth, so this is where a ray is taken to end.
+  uniform float uGroundKm;
   uniform float uFlattening;
   uniform vec3 uRayleigh;
   uniform float uMie;
@@ -1399,8 +1451,16 @@ const SKY_COMMON = /* glsl */ `
     near = max(shell.x, 0.0);
     float far = shell.y;
     // Stop at the ground: air beyond it is not on this ray.
-    vec2 ground = sphereSpan(origin, ray, uRadius);
-    if (ground.x > 0.0 && ground.y > ground.x) far = min(far, ground.x);
+    vec2 ground = sphereSpan(origin, ray, uRadius + uGroundKm);
+    if (ground.x > 0.0 && ground.y > ground.x) {
+      far = min(far, ground.x);
+    } else if (uGroundKm > 0.0) {
+      // Over the local horizon but still into the lower ground: that is the
+      // distant terrain, and ending at the tangent point joins it to the near
+      // ground with no seam where the ray stops hitting the sphere above.
+      vec2 base = sphereSpan(origin, ray, uRadius);
+      if (base.x > 0.0 && base.y > base.x) far = min(far, max(-dot(origin, ray), near));
+    }
     len = far - near;
     return len > 1e-6;
   }
@@ -1696,6 +1756,7 @@ export class Planet {
         // topography, and adding seven kilometres of invented swell to it both
         // wastes the data and moves the ground away from every position derived
         // from it. On the Moon it lifted the surface above the Apollo landers.
+        uTerrain: { value: spec.terrain ?? 0 },
         uMacroRelief: {
           value:
             spec.macroRelief ??
@@ -1838,6 +1899,7 @@ export class Planet {
       uCameraLocal: { value: new Vector3() },
       uRadius: { value: this.radius },
       uShellRadius: { value: shellRadius },
+      uGroundKm: { value: 0 },
       uFlattening: { value: spec.flattening ?? 0 },
       uRayleigh: {
         value: new Vector3(
@@ -2086,7 +2148,7 @@ export class Planet {
   update({
     cameraLocal, sunLocal, pixelsPerRadian, sunColour, sunIntensity, viewLocal, coneCos,
     occluder, occluder2, umbraLight, sunAngular, shineDir, shine, shineColour, tideDir,
-    detailScale = 1, patchScale = 1, microDetail = true,
+    detailScale = 1, patchScale = 1, microDetail = true, groundKm = 0,
   }) {
     const u = this.material.uniforms;
     u.uCameraLocal.value.copy(cameraLocal);
@@ -2152,6 +2214,10 @@ export class Planet {
         const s = this.skyUniforms;
         s.uCameraLocal.value.copy(cameraLocal);
         s.uSunDir.value.copy(sunLocal);
+        // Faded out with height so the view of the limb from high up is the
+        // reference sphere's, as it is from outside.
+        const fade = clamp(1 - distance / Math.max(Math.abs(groundKm) * 100, 1), 0, 1);
+        s.uGroundKm.value = groundKm * fade;
         const light = this.skyInscatterMaterial.uniforms;
         if (sunColour) light.uSunColour.value.copy(sunColour);
         if (sunIntensity !== undefined) light.uSunIntensity.value = sunIntensity;

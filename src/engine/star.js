@@ -173,6 +173,56 @@ const CORONA_FRAGMENT = /* glsl */ `
   }
 `;
 
+/*
+ * The glare a bright star throws across the lens: a wide soft halo, four
+ * diffraction spikes from the vanes holding a secondary mirror, and a faint
+ * ghost ring. Sized in pixels from the light arriving, so a host star seen from
+ * its own planet floods a good part of the frame and a far one is a spiked
+ * point, which is how a camera rather than a diagram sees a star.
+ */
+const FLARE_FRAGMENT = /* glsl */ `
+  precision highp float;
+
+  #include <common>
+  #include <logdepthbuf_pars_fragment>
+
+  uniform vec3 uColour;
+  uniform float uIntensity;
+  uniform float uSpikes;
+  uniform float uResolved;
+  uniform float uAngle;
+  uniform float uDiscFraction;
+  varying vec2 vUv;
+
+  void main() {
+    float d = length(vUv);
+    if (d >= 1.0) discard;
+
+    #include <logdepthbuf_fragment>
+
+    float limb = clamp((d - uDiscFraction) / max(1.0 - uDiscFraction, 1e-3), 0.0, 1.0);
+    float edge = pow(1.0 - d, 2.0);
+    float halo = (exp(-limb * 10.0) * 0.5 + exp(-limb * 3.5) * 0.25 + exp(-limb * 1.4) * 0.07) * edge;
+
+    float c = cos(uAngle), s = sin(uAngle);
+    vec2 q = mat2(c, -s, s, c) * vUv;
+    float spikes = 0.0;
+    for (int i = 0; i < 2; i++) {
+      vec2 r = i == 0 ? q : vec2(-q.y, q.x);
+      float along = abs(r.x);
+      float width = 0.0025 + 0.006 * along;
+      spikes += exp(-pow(r.y / width, 2.0)) * pow(max(1.0 - along, 0.0), 2.6);
+    }
+    float ghost = exp(-pow((d - 0.62) / 0.05, 2.0)) * 0.02 * uSpikes;
+
+    // Kept off the disc itself once it is resolved, so a close star keeps its
+    // surface; a disc a few pixels across is all glare anyway.
+    float off = mix(1.0, smoothstep(uDiscFraction * 0.85, uDiscFraction * 1.15, d), uResolved);
+    vec3 tint = mix(uColour, vec3(1.0), 0.35 * exp(-d * 6.0));
+    gl_FragColor = vec4(tint * uIntensity * (halo + spikes * uSpikes * 0.9 + ghost) * off, 1.0);
+  }
+`;
+
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 /**
@@ -261,6 +311,27 @@ export class Star {
     this.corona.frustumCulled = false;
     this.corona.renderOrder = 20;
     this.group.add(this.corona);
+
+    this.flareMaterial = new ShaderMaterial({
+      uniforms: {
+        uColour: { value: new Color(...colour) },
+        uIntensity: { value: 0 },
+        uScale: { value: radiusKm * 6 },
+        uSpikes: { value: 1 },
+        uResolved: { value: 0 },
+        uAngle: { value: 0.26 },
+        uDiscFraction: { value: 0 },
+      },
+      vertexShader: CORONA_VERTEX,
+      fragmentShader: FLARE_FRAGMENT,
+      blending: AdditiveBlending,
+      transparent: true,
+      depthWrite: false,
+    });
+    this.flare = new Mesh(new PlaneGeometry(2, 2), this.flareMaterial);
+    this.flare.frustumCulled = false;
+    this.flare.renderOrder = 21;
+    this.group.add(this.flare);
   }
 
   setMap(texture) {
@@ -307,5 +378,19 @@ export class Star {
       (this.baseCorona + (glare.intensity - this.baseCorona) * point) * visibility;
     this.mesh.visible = visibility > 0.002;
     this.corona.visible = this.mesh.visible;
+
+    const light = clamp(brightness, 0, 4);
+    this.flare.visible = this.mesh.visible && pixelsPerRadian > 0 && light > 0.002;
+    if (this.flare.visible) {
+      const discRadiusPx = discPixels / 2;
+      const flarePx = Math.max(70 + 230 * Math.log10(1 + light * 4), discRadiusPx * 2.4);
+      const flareScale = (flarePx * distanceKm) / pixelsPerRadian;
+      const f = this.flareMaterial.uniforms;
+      f.uScale.value = flareScale;
+      f.uDiscFraction.value = clamp(this.radius / flareScale, 0, 0.9);
+      f.uSpikes.value = 1 - clamp((discRadiusPx - 4) / 30, 0, 1);
+      f.uResolved.value = clamp((discRadiusPx - 14) / 30, 0, 1);
+      f.uIntensity.value = 0.55 * Math.pow(light, 0.6) * visibility;
+    }
   }
 }
