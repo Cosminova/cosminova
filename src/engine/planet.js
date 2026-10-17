@@ -10,6 +10,8 @@ import {
   FloatType,
   FrontSide,
   Group,
+  Matrix3,
+  Matrix4,
   Mesh,
   NearestFilter,
   Points,
@@ -28,6 +30,7 @@ import { CubeSphere } from './cubesphere.js';
 import { hydrostaticAxes, isLocked, rotationalAxes } from './figures.js';
 import { bodyGeology } from './geology.js';
 import { SHADOW_GLSL } from './shadow-glsl.js';
+import { GROUND_DETAIL_GLSL } from './ground-detail-glsl.js';
 import { CRATER_DETAIL_MARGIN, CRATER_LACUNARITY, TERRAIN_GLSL } from './terrain-glsl.js';
 import { platform } from './platform.js';
 
@@ -501,6 +504,7 @@ const SURFACE_UNIFORMS_GLSL = /* glsl */ `
   uniform float uHasDem;
   uniform float uDemLodBias;
   uniform vec3 uCameraLocal;      // body frame, km
+  uniform vec3 uAxisScale;        // the figure: the sphere scaled by this
   uniform float uPixelsPerRadian;
   uniform float uCraterFreq;
   uniform float uCraterOctaves;
@@ -551,7 +555,7 @@ const HEIGHT_GLSL = /* glsl */ `
    * leave a cliff along every LOD boundary.
    */
   float pixelAngleAt(vec3 d) {
-    vec3 toCamera = uCameraLocal - d * uRadius;
+    vec3 toCamera = uCameraLocal - d * uRadius * uAxisScale;
     float dist = max(length(toCamera), 1e-4);
     // Foreshortening: seen edge on, a quad covers far more ground along the view
     // direction than across it, and relief has to be filtered to the larger of
@@ -602,7 +606,6 @@ const VERTEX = /* glsl */ `
   uniform float uMorphOverride;
   uniform float uMorphLevel;
   uniform float uSkirtScale;
-  uniform vec3 uAxisScale;
   uniform vec3 uTideDir;
   uniform float uTidal;
 
@@ -610,6 +613,11 @@ const VERTEX = /* glsl */ `
   varying float vLevel;
   varying float vHeight;
   varying vec3 vLocal;
+  varying vec3 vRel;
+
+  uniform vec3 uAnchor;
+  uniform vec3 uCameraRel;
+  uniform mat3 uViewRotation;
 
   ${SURFACE_UNIFORMS_GLSL}
   ${TERRAIN_GLSL}
@@ -665,7 +673,16 @@ const VERTEX = /* glsl */ `
     vHeight = height;
     vLocal = local;
 
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(local, 1.0);
+    // Relative to the eye through an anchor near it rather than through the
+    // model-view matrix. A position a planet's radius long has about half a
+    // metre of precision in single float, and the matrix route spends that on
+    // a difference that changes as the camera moves, so standing on the ground
+    // it shook by that much with every step. Subtracting the anchor first is
+    // exact (the two are within a few hundred km of each other), and what is
+    // left over to subtract is small enough to carry to the millimetre.
+    vec3 rel = (local - uAnchor) - uCameraRel;
+    vRel = rel;
+    gl_Position = projectionMatrix * vec4(uViewRotation * rel, 1.0);
 
     #include <logdepthbuf_vertex>
   }
@@ -757,11 +774,16 @@ const FRAGMENT = /* glsl */ `
   varying float vLevel;
   varying float vHeight;
   varying vec3 vLocal;
+  // From the eye, at full precision; see the vertex stage.
+  varying vec3 vRel;
+  uniform vec3 uCameraRel;
+  uniform float uSkyFill;
 
   ${SHADOW_GLSL}
   ${TERRAIN_GLSL}
   ${FRACTURE_GLSL}
   ${RELIEF_GLSL}
+  ${GROUND_DETAIL_GLSL}
 
   vec2 dirToUv(vec3 d) {
     float lon = atan(d.z, -d.x);
@@ -957,7 +979,7 @@ const FRAGMENT = /* glsl */ `
 
     vec3 dir = normalize(vDir);
     vec2 uv = dirToUv(dir);
-    vec3 view = normalize(uCameraLocal - vLocal);
+    vec3 view = normalize(-vRel);
 
     // A pixel near the limb covers far more ground than one at the sub-camera
     // point, by roughly one over the cosine of the incidence angle. Procedural
@@ -966,7 +988,7 @@ const FRAGMENT = /* glsl */ `
     float grazing = max(dot(dir, view), 0.02);
     float footprintScale = min(1.0 / grazing, 24.0);
     // Angular size of one pixel projected onto this fragment's own surface.
-    float pixelAngle = (length(uCameraLocal - vLocal) / uRadius) / uPixelsPerRadian * footprintScale;
+    float pixelAngle = (length(vRel) / uRadius) / uPixelsPerRadian * footprintScale;
     float craterShadow;
     vec2 craterMarks;
     float fractureDepth;
@@ -988,6 +1010,20 @@ const FRAGMENT = /* glsl */ `
       craterShadow *= 1.0 - wet;
     }
 
+    // Stones and soil underfoot, on dry ground and only where a pixel is small
+    // enough to show them.
+    float detailShade = 1.0;
+    if (uRockDensity > 0.001) {
+      // The mean of the footprint's two sides rather than its long one: fading
+      // on the long side clears the stones off the ground twenty metres out.
+      float footprintM = length(vRel) * 1000.0 / uPixelsPerRadian * sqrt(footprintScale);
+      if (footprintM < 6.0) {
+        float sea = uHasOcean > 0.5 ? texture2D(uOceanMap, uv).r : wet;
+        vec3 metres = uDetailFrac + (uCameraRel + vRel) * 1000.0;
+        detailShade = groundDetail(dir, metres, footprintM, 1.0 - sea, normal);
+      }
+    }
+
     // The colour map runs out of resolution long before the geometry does: on a
     // moon mapped at a kilometre per pixel, everything below a kilometre is a
     // blur. Procedural craters already carry the relief below that scale, and
@@ -1002,6 +1038,7 @@ const FRAGMENT = /* glsl */ `
     albedo *= 1.0 + craterMarks.x * uMarkContrast * 0.3;
     albedo *= 1.0 - craterMarks.y * uMarkContrast * 0.12;
     albedo *= 1.0 + fractureDepth * uFractureTint;
+    albedo *= detailShade;
 
     float steep = 1.0 - max(dot(normal, dir), 0.0);
     if (uTerrain > 0.00001 && uHasColourMap < 0.5) {
@@ -1102,6 +1139,12 @@ const FRAGMENT = /* glsl */ `
     shade *= ringShade;
 
     vec3 colour = albedo * uSunColour * uSunIntensity * shade;
+    // Fill for what the sun does not reach directly: skylight under an
+    // atmosphere, and on an airless world the much fainter light thrown back
+    // off the sunlit ground around. Without it every shadow is a hole.
+    float dayside = smoothstep(-0.08, 0.15, dot(dir, uSunDir)) * eclipse;
+    colour += albedo * uSunColour * uSunIntensity * uSkyFill * dayside
+      * (0.55 + 0.45 * dot(normal, dir));
 
     // Reflected light from the host planet — earthshine, and its equivalent on
     // the moons of the giants. Scaled by the same exposure as direct sunlight, so
@@ -1667,7 +1710,10 @@ export class Planet {
 
     this.sphere = new CubeSphere({
       resolution: spec.patchResolution ?? 24,
-      maxLevel: spec.maxLevel ?? 14,
+      // Deep enough for quads under a metre on an Earth-sized world, which is
+      // what standing on the ground needs; anchored rendering is what makes
+      // positions that fine hold still.
+      maxLevel: spec.maxLevel ?? 19,
       maxPatches: spec.maxPatches ?? DEFAULT_MAX_PATCHES,
       pixelsPerQuad: spec.pixelsPerQuad ?? 7,
     });
@@ -1816,6 +1862,18 @@ export class Planet {
         uShineDir: { value: new Vector3(0, 1, 0) },
         uShineColour: { value: new Color(1.0, 0.88, 0.72) },
         uShine: { value: 0 },
+        uAnchor: { value: new Vector3() },
+        uCameraRel: { value: new Vector3() },
+        uViewRotation: { value: new Matrix3() },
+        uDetailCell: { value: new Int32Array(3) },
+        uDetailFrac: { value: new Vector3() },
+        uSkyFill: { value: 0 },
+        // Stones on the ground: thickest on airless worlds, where nothing
+        // weathers them away; none on a world with no ground to stand on.
+        uRockDensity: {
+          value: spec.rockDensity
+            ?? ((spec.banding ?? 0) > 0 || this.radius > 20000 ? 0 : spec.atmosphere ? 0.3 : 0.6),
+        },
       },
       vertexShader: VERTEX,
       fragmentShader: FRAGMENT,
@@ -1824,6 +1882,37 @@ export class Planet {
 
     this.mesh = new Mesh(this.sphere.geometry, this.material);
     this.mesh.frustumCulled = false;
+    // The camera in this mesh's own frame, taken from the matrices actually
+    // being drawn with (doubles on this side), and split into a single-float
+    // anchor and a small remainder: see the vertex stage.
+    const anchor = this.material.uniforms.uAnchor.value;
+    const cameraRel = this.material.uniforms.uCameraRel.value;
+    const viewRotation = this.material.uniforms.uViewRotation.value;
+    const detailCell = this.material.uniforms.uDetailCell.value;
+    const detailFrac = this.material.uniforms.uDetailFrac.value;
+    const inverse = new Matrix4();
+    const modelView = new Matrix4();
+    const eye = new Vector3();
+    let anchored = false;
+    this.mesh.onBeforeRender = (_renderer, _scene, camera) => {
+      inverse.copy(this.mesh.matrixWorld).invert();
+      eye.setFromMatrixPosition(camera.matrixWorld).applyMatrix4(inverse);
+      if (!anchored || eye.distanceToSquared(anchor) > 400) {
+        anchor.set(Math.fround(eye.x), Math.fround(eye.y), Math.fround(eye.z));
+        anchored = true;
+        // The same point in whole metres and a remainder. Offset by 2^24 so
+        // the cell is never negative, which keeps the shader's shifts exact.
+        for (const [i, axis] of ['x', 'y', 'z'].entries()) {
+          const metres = anchor[axis] * 1000;
+          const cell = Math.floor(metres);
+          detailCell[i] = cell + 16777216;
+          detailFrac.setComponent(i, metres - cell);
+        }
+      }
+      cameraRel.subVectors(eye, anchor);
+      modelView.multiplyMatrices(camera.matrixWorldInverse, this.mesh.matrixWorld);
+      viewRotation.setFromMatrix4(modelView);
+    };
     this.mesh.name = `${spec.key}-surface`;
     this.spin.add(this.mesh);
 
@@ -2177,6 +2266,10 @@ export class Planet {
     if (this._microDetail === undefined) this._microDetail = u.uMicroDetail.value;
     u.uMicroDetail.value = microDetail ? this._microDetail : 0;
     const altitudeRadii = distance / this.radius;
+    // Shadow fill only near the ground: from orbit it would wash out the
+    // terminator, which is the one place relief shows from up there.
+    const fill = spec.skyFill ?? (u.uRockDensity.value <= 0 ? 0 : spec.atmosphere ? 0.12 : 0.045);
+    u.uSkyFill.value = fill * clamp(1 - distance / 80, 0, 1);
     const quad = (this.spec.pixelsPerQuad ?? 7) / Math.max(patchScale, 0.05);
     this.sphere.pixelsPerQuad = altitudeRadii < 0.05 ? Math.max(3.5, quad * 0.55) : quad;
     this.sphere.maxPatches = Math.max(
@@ -2224,8 +2317,10 @@ export class Planet {
       }
     }
 
-    // Cube-sphere works in radius units; convert once here.
-    const scaled = this._cameraLocal.copy(cameraLocal).divideScalar(this.radius);
+    // Cube-sphere works in radius units on the round sphere, so the camera is
+    // taken back through the figure's squash first: otherwise, near the pole of a
+    // flattened world, the ground underfoot looks kilometres away and never refines.
+    const scaled = this._cameraLocal.copy(cameraLocal).divide(u.uAxisScale.value).divideScalar(this.radius);
     return this.sphere.update(scaled, pixelsPerRadian, viewLocal ?? null, coneCos ?? -1);
   }
 }

@@ -162,6 +162,28 @@ export class OrbitApproachControls {
     this.standHeightKm = 0.012;
 
     /**
+     * Walking: standing on the target and moving over its ground. The place and
+     * the heading are held in the body's own frame (`walkFrame`, set by the app
+     * each frame), so you stay where you are standing while the world turns
+     * rather than having the ground slide out from under you at the speed of
+     * its rotation. The height is not state: it is the ground the app probed
+     * under the camera (`walkGroundKm`) plus the eye height.
+     */
+    this.walkLocal = new Vector3(0, 1, 0);
+    this.walkHeadingLocal = new Vector3(0, 0, 1);
+    this.walkPitch = 0;
+    this.walkFrame = null;
+    /** The body's figure: its terrain is drawn on the unit sphere scaled by this. */
+    this.walkAxisScale = new Vector3(1, 1, 1);
+    this.walkGroundKm = 0;
+    this.walkEyeKm = 0.0017;
+    /** km/s at a walk; Shift runs at six times this. */
+    this.walkSpeed = 0.0014;
+    this._walkFrameInverse = new Quaternion();
+    this._walkMove = new Vector3();
+    this._walkRight = new Vector3();
+
+    /**
      * Field of view in degrees, owned here rather than on the camera so the
      * interface has one place to read and write it and so it survives the
      * ground-view switch, which needs a wider field and has to put the previous
@@ -342,7 +364,10 @@ export class OrbitApproachControls {
         return;
       }
       const scale = this.orbitSensitivity * clamp(Math.log10(Math.max(this.distanceRadii, 1.001)), 0.02, 2.4);
-      if (this.mode === 'roam' && this.pilot) {
+      if (this.mode === 'walk') {
+        this._walkLook(dx, dy);
+        this._lastDrag.set(0, 0);
+      } else if (this.mode === 'roam' && this.pilot) {
         this.pilot.steer(dx, dy);
         this._lastDrag.set(0, 0);
       } else if (this.mode === 'roam') {
@@ -425,6 +450,11 @@ export class OrbitApproachControls {
       'wheel',
       (event) => {
         event.preventDefault();
+        if (this.mode === 'walk') {
+          // On foot the wheel is the pace, from a stroll to a vehicle.
+          this.walkSpeed = clamp(this.walkSpeed * Math.exp(-event.deltaY * 0.0025), 0.0004, 2);
+          return;
+        }
         this._flight = null;
         this.cruise = 0;
         // Chrome and Firefox report a trackpad pinch as a wheel with ctrlKey
@@ -542,6 +572,57 @@ export class OrbitApproachControls {
     } else {
       this.roamOffset.subVectors(this.worldPosition, this.targetPosition);
     }
+  }
+
+  /**
+   * Stand on the target where the camera is now and walk from there, facing
+   * the way the camera was facing.
+   */
+  startWalk() {
+    if (this.mode === 'roam') this.stopRoam();
+    this._flight = null;
+    this.cruise = 0;
+    if (this.riding) this.setRiding(false);
+    this.earthView = false;
+    this.yawVelocity = 0;
+    this.pitchVelocity = 0;
+    this.zoomVelocity = 0;
+    const inverse = this.walkFrame ? this._walkFrameInverse.copy(this.walkFrame).invert() : null;
+    const up = this.walkLocal.subVectors(this.worldPosition, this.targetPosition);
+    if (up.lengthSq() < 1e-18) up.set(0, 1, 0);
+    up.normalize();
+    const heading = this.walkHeadingLocal.copy(this._forward);
+    const along = heading.dot(up);
+    heading.addScaledVector(up, -along);
+    if (heading.lengthSq() < 1e-8) {
+      // Looking straight down: any direction along the ground will do.
+      heading.set(1, 0, 0).addScaledVector(up, -up.x);
+      if (heading.lengthSq() < 1e-8) heading.set(0, 0, 1).addScaledVector(up, -up.z);
+    }
+    heading.normalize();
+    // Arriving from orbit the camera is looking down at the ground; stand up
+    // facing the horizon instead.
+    this.walkPitch = Math.abs(along) > 0.8 ? -0.06 : Math.asin(clamp(along, -1, 1));
+    if (inverse) {
+      up.applyQuaternion(inverse);
+      heading.applyQuaternion(inverse);
+    }
+    // Back onto the round sphere the terrain is built on, from the squashed
+    // figure it is drawn as.
+    up.divide(this.walkAxisScale).normalize();
+    heading.addScaledVector(up, -heading.dot(up)).normalize();
+    this.walkEyeKm = 0.0017;
+    this.lookYaw = 0;
+    this.lookPitch = 0;
+    this.mode = 'walk';
+  }
+
+  /** Back to orbiting the target from wherever the walk ended. */
+  stopWalk() {
+    if (this.mode !== 'walk') return;
+    this.mode = 'orbit';
+    this.lookYaw = 0;
+    this.lookPitch = 0;
   }
 
   /** Take hold of the target again, from wherever roaming left the camera. */
@@ -805,6 +886,11 @@ export class OrbitApproachControls {
    * stays one continuous motion: keep pulling back and eventually you leave.
    */
   zoomBy(amount) {
+    if (this.mode === 'walk') {
+      this.zoomVelocity = 0;
+      this.walkSpeed = clamp(this.walkSpeed * Math.exp(-amount * 0.6), 0.0004, 2);
+      return;
+    }
     if (this.mode === 'roam' && this.pilot) {
       // A notch is a notch of throttle; coasting on would keep opening it.
       this.zoomVelocity = 0;
@@ -1009,9 +1095,79 @@ export class OrbitApproachControls {
     this.lookPitch = 0.35;
   }
 
+  /**
+   * One frame on foot: move over the ground, then place the camera on it.
+   * Returns the view direction.
+   */
+  _stepWalk(dt) {
+    const keys = this._keys;
+    const thrust =
+      (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) +
+      (keys.has('KeyS') || keys.has('ArrowDown') ? -1 : 0);
+    const strafe =
+      (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) +
+      (keys.has('KeyA') || keys.has('ArrowLeft') ? -1 : 0);
+    const rise = (keys.has('KeyE') ? 1 : 0) + (keys.has('KeyQ') ? -1 : 0);
+    const run = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6 : 1;
+
+    const upL = this.walkLocal;
+    const headingL = this.walkHeadingLocal;
+    // Right-handed with the view: heading x up points to the right.
+    const rightL = this._walkRight.crossVectors(headingL, upL).normalize();
+    if (rise) {
+      this.walkEyeKm = clamp(this.walkEyeKm * Math.exp(rise * dt * 1.4) + rise * dt * 0.002, 0.0017, 40);
+    }
+    if (thrust || strafe) {
+      const radiusKm = Math.max(this.targetRadius + this.walkGroundKm, 1e-6);
+      // Faster with height, so a hover over the plains is not a crawl.
+      const speed = this.walkSpeed * run * Math.max(1, this.walkEyeKm / 0.0017) ** 0.5;
+      const step = (speed * dt) / radiusKm;
+      const move = this._walkMove.copy(headingL).multiplyScalar(thrust).addScaledVector(rightL, strafe);
+      if (move.lengthSq() > 1) move.normalize();
+      upL.addScaledVector(move, step).normalize();
+      headingL.addScaledVector(upL, -headingL.dot(upL)).normalize();
+    }
+
+    const up = this.groundUp.copy(upL);
+    const heading = this._walkMove.copy(headingL);
+    if (this.walkFrame) {
+      up.applyQuaternion(this.walkFrame);
+      heading.applyQuaternion(this.walkFrame);
+    }
+    // Ground point on the drawn figure, then the eye straight up from it.
+    const eye = this._walkRight.copy(upL)
+      .multiply(this.walkAxisScale)
+      .multiplyScalar(this.targetRadius + this.walkGroundKm)
+      .addScaledVector(upL, this.walkEyeKm);
+    if (this.walkFrame) eye.applyQuaternion(this.walkFrame);
+    const distanceKm = eye.length();
+    this.distanceRadii = distanceKm / Math.max(this.targetRadius, 1e-6);
+    this._offset.copy(eye).multiplyScalar(1 / distanceKm);
+    this._anglesFrom(this._offset.x, this._offset.y, this._offset.z);
+    this.originKey = this.targetKey;
+    this.originOffset.copy(eye);
+    this.worldPosition.copy(this.targetPosition).add(this.originOffset);
+    this.lookYaw = 0;
+    this.lookPitch = 0;
+    const cp = Math.cos(this.walkPitch);
+    return this._forward.copy(heading).multiplyScalar(cp).addScaledVector(up, Math.sin(this.walkPitch));
+  }
+
+  /** Turn on the spot while walking: yaw about the local vertical, pitch up and down. */
+  _walkLook(dx, dy) {
+    const s = this.lookSensitivity;
+    const upL = this.walkLocal;
+    this._quat.setFromAxisAngle(upL, -dx * s);
+    this.walkHeadingLocal.applyQuaternion(this._quat);
+    this.walkHeadingLocal.addScaledVector(upL, -this.walkHeadingLocal.dot(upL)).normalize();
+    this.walkPitch = clamp(this.walkPitch - dy * s, -1.5, 1.5);
+  }
+
   _applyKeys(dt) {
     // Flying the ship, the keys are the ship's and it has already read them.
     if (this.pilot && this.mode === 'roam') return;
+    // On foot the keys walk, and _stepWalk has already read them.
+    if (this.mode === 'walk' && !this._flight) return;
     const keys = this._keys;
     const thrust =
       (keys.has('KeyW') || keys.has('ArrowUp') ? 1 : 0) +
@@ -1216,6 +1372,8 @@ export class OrbitApproachControls {
         this.worldPosition.y - targetPosition.y,
         this.worldPosition.z - targetPosition.z,
       );
+    } else if (this.mode === 'walk' && !flight) {
+      forward = this._stepWalk(dt);
     } else if (this.mode === 'roam' && !flight) {
       // The one branch that does not rebuild the camera's position. Everywhere
       // else `worldPosition` is a derived quantity — target plus a bearing
@@ -1273,7 +1431,7 @@ export class OrbitApproachControls {
     // the fallback below is the limit the two sides agree on rather than a
     // fixed axis, which is what keeps that single frame from jumping.
     const piloting = Boolean(this.pilot) && this.mode === 'roam' && !flight;
-    const orbiting = !this.riding && !this.earthView && !piloting;
+    const orbiting = !this.riding && !this.earthView && !piloting && !(this.mode === 'walk' && !flight);
     if (orbiting) {
       // Take the horizon straight from the yaw instead of from a cross product.
       //

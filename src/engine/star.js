@@ -345,7 +345,7 @@ export class Star {
    * @param brightness this star's light where the camera is, at the exposure
    *   the rest of the frame is being drawn at. 1 is full sunlight at Earth.
    */
-  update({ cameraLocal, time, distanceKm, pixelsPerRadian = 0, brightness = 1, visibility = 1 }) {
+  update({ cameraLocal, time, distanceKm, pixelsPerRadian = 0, brightness = 1, visibility = 1, flare = true }) {
     this.material.uniforms.uCameraLocal.value.copy(cameraLocal);
     this.material.uniforms.uTime.value = time;
     // The corona is sized in world units, so it has to grow with distance to
@@ -380,7 +380,7 @@ export class Star {
     this.corona.visible = this.mesh.visible;
 
     const light = clamp(brightness, 0, 4);
-    this.flare.visible = this.mesh.visible && pixelsPerRadian > 0 && light > 0.002;
+    this.flare.visible = flare && this.mesh.visible && pixelsPerRadian > 0 && light > 0.002;
     if (this.flare.visible) {
       const discRadiusPx = discPixels / 2;
       const flarePx = Math.max(70 + 230 * Math.log10(1 + light * 4), discRadiusPx * 2.4);

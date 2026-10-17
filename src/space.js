@@ -53,6 +53,10 @@ import { DeepField } from './engine/deep-field.js';
 import { ExoSystem, exoKey, teffToBv } from './engine/exo-system.js';
 import { inventBlackHoleSystems, inventGalaxySystems } from './engine/generated.js';
 import { BlackHole, BLACK_HOLES, BLACK_HOLE_LAYER } from './engine/black-hole.js';
+import {
+  createDeepObjects, CLUSTERS, CLUSTER_LABELS, NEBULAE, NEBULA_LABELS, NEUTRON_LABELS, NEUTRON_STARS,
+  NEUTRON_STAR_RADIUS_KM,
+} from './engine/deep-objects.js';
 import { buildColorLookup, colorIndexToLinearRgb } from './color.js';
 import { describeStar, spectralTemperature, starLook, starTint, surfaceBrightness, SOLAR_TEFF } from './engine/stellar.js';
 import { hashName } from './engine/classify.js';
@@ -400,6 +404,8 @@ for (const spec of BLACK_HOLES) {
   blackHoles.set(`bh:${spec.key}`, hole);
   extras.add(hole.group);
 }
+const deepObjects = createDeepObjects();
+extras.add(deepObjects.group);
 
 async function loadBodyTextures(key) {
   const planet = planets.get(key);
@@ -734,6 +740,25 @@ for (const spec of BLACK_HOLES) {
     kind: 'black-hole',
     group: 'Black holes',
     spec,
+    distPc: spec.distPc,
+  });
+}
+for (const spec of NEBULAE) {
+  addDestination({
+    key: `neb:${spec.key}`, name: spec.name, kind: 'nebula', group: 'Nebulae', spec,
+    subtype: spec.type, detail: NEBULA_LABELS[spec.type], distPc: spec.distPc,
+  });
+}
+for (const spec of CLUSTERS) {
+  addDestination({
+    key: `cl:${spec.key}`, name: spec.name, kind: 'cluster', group: 'Star clusters', spec,
+    subtype: spec.type, detail: CLUSTER_LABELS[spec.type], distPc: spec.distPc,
+  });
+}
+for (const spec of NEUTRON_STARS) {
+  addDestination({
+    key: `ns:${spec.key}`, name: spec.name, kind: 'neutron-star', group: 'Neutron stars', spec,
+    subtype: spec.type, detail: NEUTRON_LABELS[spec.type], distPc: spec.distPc,
   });
 }
 
@@ -886,6 +911,10 @@ function resolveWorld(key) {
       kind: 'black-hole',
       spec: dest.spec,
     };
+  }
+  if (dest.kind === 'nebula' || dest.kind === 'cluster' || dest.kind === 'neutron-star') {
+    const item = deepObjects.get(key);
+    return { key, name: dest.name, position: item.world.clone(), radius: item.radiusKm, kind: dest.kind, spec: dest.spec, dest };
   }
   return null;
 }
@@ -1121,6 +1150,9 @@ function selectTarget(key, { fly = false, duration = 3200 } = {}) {
       // side to something like 40. Arriving at 18 puts the camera inside the
       // disk, looking at an orange fog.
       : resolved.kind === 'black-hole' ? 95
+      : resolved.kind === 'nebula' ? 2.6
+      : resolved.kind === 'cluster' ? 2.2
+      : resolved.kind === 'neutron-star' ? 70
       : key === 'sun' || resolved.kind === 'star' ? 12
       : resolved.kind === 'craft' ? 5
       : giantMoon
@@ -1260,6 +1292,9 @@ function toggleViewFromEarth(enabled) {
     if (resolved) {
       const distanceRadii = resolved.kind === 'galaxy' ? 2.4
         : resolved.kind === 'black-hole' ? 18
+        : resolved.kind === 'nebula' ? 2.6
+        : resolved.kind === 'cluster' ? 2.2
+        : resolved.kind === 'neutron-star' ? 70
         : state.target === 'sun' || resolved.kind === 'star' ? 12
         : 3.4;
       controls.flyTo(state.target, { distanceRadii, duration: 2800 });
@@ -1923,6 +1958,8 @@ let roamSurfaceKm = Infinity;
 const roamNearest = { key: null, position: null, radius: 0 };
 const tmpShipWorld = new Vector3();
 const tmpShipUp = new Vector3();
+const tmpWalkProbe = new Vector3();
+const tmpUnitScale = new Vector3(1, 1, 1);
 const tmpBodyInverse = new Quaternion();
 
 /**
@@ -1939,6 +1976,7 @@ const tmpBodyInverse = new Quaternion();
  * the relief can matter.
  */
 const cameraGround = { key: null, km: 0, at: 0, dir: new Vector3(), altitudeKm: Infinity };
+let groundExposure = 1;
 const groundProbeDirs = [new Vector3()];
 const GROUND_CLEARANCE_KM = 0.004;
 const SHIP_CLEARANCE_KM = 0.03;
@@ -2006,9 +2044,25 @@ function floorBeforeControls(resolved, now) {
     horizonForCraft(resolved, now);
     return;
   }
-  const ground = groundUnder(resolved.key, controls.worldPosition, now);
+  // Kept current in every mode, because starting a walk converts the camera
+  // into this frame before the first walking frame has run.
+  const surface = surfaceOf(resolved.key);
+  controls.walkFrame = surface?.orientation ?? null;
+  controls.walkAxisScale.copy(surface?.planet.material.uniforms.uAxisScale?.value ?? tmpUnitScale);
+  // A walker's position is a direction on the undistorted sphere, which on a
+  // flattened body is not the direction of the camera from the centre.
+  const probePoint = controls.mode === 'walk' && surface
+    ? tmpWalkProbe.copy(controls.walkLocal).applyQuaternion(surface.orientation)
+      .multiplyScalar(surface.radius).add(surface.position)
+    : controls.worldPosition;
+  const ground = groundUnder(resolved.key, probePoint, now);
   if (!ground) return;
   const radius = resolved.radius;
+  if (controls.mode === 'walk') {
+    controls.walkGroundKm = ground.groundKm;
+    cameraGround.altitudeKm = controls.walkEyeKm;
+    return;
+  }
   const floor = (radius + ground.groundKm + GROUND_CLEARANCE_KM) / radius;
   controls.minDistanceRadii = Math.max(1.000001, floor);
   if (controls.distanceRadii < controls.minDistanceRadii) controls.distanceRadii = controls.minDistanceRadii;
@@ -2484,7 +2538,7 @@ function pickNamed(clientX, clientY) {
     }
   }
   for (const dest of destinations) {
-    if (dest.kind !== 'star' && dest.kind !== 'galaxy' && dest.kind !== 'black-hole') continue;
+    if (!['star', 'galaxy', 'black-hole', 'neutron-star'].includes(dest.kind)) continue;
     // Invented systems carry no catalogue distance or magnitude, so the test
     // below let every one of them through: the eight stars of a galaxy ten
     // megaparsecs off, drawn nowhere, could be clicked from anywhere they
@@ -2764,8 +2818,10 @@ function collectLabelItems() {
       if (!(dest.mag <= 2.2 || dest.distPc <= 10) && !selected) continue;
     } else if (dest.kind === 'galaxy') {
       if (!shown.galaxies) continue;
-    } else if (dest.kind === 'black-hole') {
+    } else if (dest.kind === 'black-hole' || dest.kind === 'neutron-star') {
       if (!shown.blackHoles) continue;
+    } else if (dest.kind === 'nebula' || dest.kind === 'cluster') {
+      if (!shown.galaxies) continue;
     } else {
       continue;
     }
@@ -2935,6 +2991,9 @@ function frame(now) {
     // kiloparsec, where it had been a blazing point out to the edge of the
     // universe.
     visibility: pointVisibility(1, sunDistance, 8.7 + 2.5 * Math.log10(Math.max(58 / Math.max(camera.fov, 1e-4), 1))),
+    // The glare is how a star looks to someone standing in its light, not a
+    // marker for one being flown to.
+    flare: !controls.flying,
   });
   considerUpgrade('sun', (SUN.radiusKm / sunDistance) * pixelsPerRadian * 2);
 
@@ -3172,6 +3231,7 @@ function frame(now) {
         exoReference,
         state.exposure,
       ),
+      flare: !controls.flying && state.target !== exoSystem.key,
     });
     // Always drawn. A host star seen from one of its own planets is the one
     // thing in that sky you cannot be without, and it is a point source out
@@ -3276,6 +3336,7 @@ function frame(now) {
         time: now / 1000,
         distanceKm: cam.distanceTo(resolved.position),
         pixelsPerRadian,
+        flare: false,
       });
     }
   }
@@ -3291,6 +3352,17 @@ function frame(now) {
       exposure: state.exposure,
     });
   }
+
+  deepObjects.update({
+    cameraWorld: cam,
+    cameraQuaternion: camera.quaternion,
+    place: placeRelative,
+    time: now / 1000,
+    pixelsPerRadian,
+    pixelRatio: renderer.getPixelRatio(),
+    exposure: state.exposure,
+    steps: platform.mobile ? 28 : 44,
+  });
 
   const viewingGalaxy = resolved?.kind === 'galaxy';
   const fromSun = sunDistance;
@@ -3361,7 +3433,14 @@ function frame(now) {
     }),
   );
 
-  renderer.toneMappingExposure = 1;
+  // Standing on an airless world the ground is lit by a low sun and nothing
+  // else, and a fixed exposure leaves it a murk. Open up, as a surface camera
+  // does: the Apollo frames are exposed for the regolith, not for space.
+  const standing = controls.mode === 'walk' || cameraGround.altitudeKm < 3;
+  const airless = !surfaceOf(state.target)?.planet.atmosphereMaterial;
+  const wanted = standing && airless ? 1.8 : 1;
+  groundExposure += (wanted - groundExposure) * Math.min(1, dt * 2);
+  renderer.toneMappingExposure = groundExposure;
   dither.advance();
   let holeDrawn = false;
   for (const hole of blackHoles.values()) {

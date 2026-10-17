@@ -58,11 +58,13 @@ const HINT = platform.touch
     flying: 'Hold W/S to thrust \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 drag to steer',
     roaming: 'Hold W/S to thrust \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 pinch sets speed',
     ship: 'W/S throttle \u00b7 A/D turn \u00b7 Q/E roll \u00b7 drag to steer \u00b7 pinch throttle',
+    walking: 'Hold W/S to walk \u00b7 step A/D \u00b7 rise E, crouch Q \u00b7 drag to look',
   }
   : {
     flying: 'Thrust W/S \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 drag to steer',
     roaming: 'Thrust W/S \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 drag to turn \u00b7 wheel sets speed',
     ship: 'Throttle W/S \u00b7 turn A/D, arrows \u00b7 roll Q/E \u00b7 drag to steer \u00b7 Shift boost \u00b7 J warp \u00b7 V view \u00b7 X stop',
+    walking: 'Walk W/S \u00b7 step A/D \u00b7 Shift runs \u00b7 rise E, crouch Q \u00b7 drag to look \u00b7 wheel sets pace',
   };
 
 export function createFlightControls({ controls, prefs }) {
@@ -189,11 +191,13 @@ export function createFlightControls({ controls, prefs }) {
   let visible = false;
   let roaming = false;
   let piloting = false;
+  let walking = false;
   const speedRow = speed.parentElement;
   const syncHint = () => {
-    hint.textContent = piloting ? HINT.ship : roaming ? HINT.roaming : HINT.flying;
-    // The ship has a throttle of its own; the roam speed scale means nothing to it.
-    speedRow.hidden = piloting;
+    hint.textContent = piloting ? HINT.ship : walking ? HINT.walking : roaming ? HINT.roaming : HINT.flying;
+    // The ship has a throttle of its own, and walking a pace of its own; the
+    // flight speed scale means nothing to either.
+    speedRow.hidden = piloting || walking;
   };
 
   return {
@@ -241,6 +245,12 @@ export function createFlightControls({ controls, prefs }) {
     setShip(on) {
       if (on === piloting) return;
       piloting = on;
+      syncHint();
+    },
+
+    setWalking(on) {
+      if (on === walking) return;
+      walking = on;
       syncHint();
     },
 

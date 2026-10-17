@@ -75,6 +75,7 @@ function specFromPlanet(entry, described, hostKey) {
     // is turned down: flooded on its own it filled into round pools.
     terrain: gaseous ? 0 : clamp(0.0024 * Math.sqrt(6371 / described.radiusKm), 0.0012, 0.006),
     macroRelief: gaseous ? 0 : 0.0012,
+    rockDensity: gaseous ? 0 : 0.5,
     // How large the surface provinces are: a world of a few continents or one
     // of many islands.
     paletteFreq: gaseous ? 2.2 : described.provinceScale,
@@ -100,8 +101,8 @@ function specFromPlanet(entry, described, hostKey) {
     // Storm cells, not continents: a handful of cycles over the whole sphere
     // gives half a dozen blobs and reads as marbling rather than weather.
     cloudFreq: 2.6 + described.provinceScale * 0.6 + (described.radiusEarth > 2 ? 1.2 : 0),
-    maxPatches: 1200,
-    maxLevel: 13,
+    maxPatches: gaseous ? 1200 : 1800,
+    maxLevel: gaseous ? 13 : 19,
     pixelsPerQuad: 6,
     atmosphere: gaseous
       ? { height: 0.08, density: 2.2, tint: palette[0] }
@@ -149,7 +150,7 @@ function specFromMoon(entry, described, parentKey) {
     palette,
     paletteFreq: described.provinceScale,
     maxPatches: 1600,
-    maxLevel: 14,
+    maxLevel: 18,
     patchResolution: 20,
     pixelsPerQuad: 5,
     classLabel: described.label,

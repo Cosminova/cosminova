@@ -30,6 +30,7 @@ import { createIntro } from './intro.js';
 import { VIEW_GROUPS } from './view-options.js';
 import { AU_KM, formatDistance } from '../engine/units.js';
 import { platform } from '../engine/platform.js';
+import { CLUSTER_LABELS, NEBULA_LABELS, NEUTRON_LABELS } from '../engine/deep-objects.js';
 
 /**
  * A touch device gets its own wording throughout this file rather than wording
@@ -65,6 +66,13 @@ const CAMERA_MODES = [
     title: TOUCH
       ? 'Thrust with the flight pad, but the view stays locked on the selected body.'
       : 'Thrust with WASD, but the view stays locked on the selected body.',
+  },
+  {
+    value: 'walk',
+    label: 'Walk',
+    title: TOUCH
+      ? 'Stand on the selected world and walk on it. Flight pad to walk, drag to look round.'
+      : 'Stand on the selected world and walk on it (L). W/S/A/D walk, Shift runs, E/Q raise and lower your eyes, drag to look, wheel sets the pace.',
   },
   {
     value: 'roam',
@@ -663,17 +671,26 @@ export function createExplorerUI(config) {
            */
           el('div', { class: 'section-title', text: 'Getting somewhere' }),
           el('p', { class: 'prose', html:
-            'Pick anything in <b>Navigation \u203a Destinations</b> and you will fly to it. '
+            `Open the <b>Catalog</b>${TOUCH ? '' : ' (<b>C</b>)'} to browse by kind \u2014 star systems, exoplanets, black holes, `
+            + 'neutron stars, nebulae, star clusters, galaxies \u2014 and pick one to fly to it. '
             + 'Or type a name into the search box at the top \u2014 any of five thousand stars, '
             + 'the named moons, a few thousand galaxies, or a planet around another sun. '
             + 'Everything in the scene is somewhere you can actually go.' }),
           el('p', { class: 'prose', html: TOUCH
             ? 'Once you are there: <b>drag</b> to swing around it, <b>pinch</b> to close in or pull back, '
-              + 'and <b>Land</b> in the Object panel to drop to the surface and stand on it.'
+              + 'and <b>Land</b> in the Object panel to drop to the surface and walk on it.'
             : 'Once you are there: <b>drag</b> to swing around it, <b>scroll</b> to close in or pull back, '
-              + 'and <b>Land</b> in the Object panel to drop to the surface and stand on it.' }),
+              + 'and <b>Land</b> in the Object panel (or <b>L</b>) to drop to the surface and walk on it.' }),
 
-          el('div', { class: 'section-title', text: 'The four camera modes' }),
+          el('div', { class: 'section-title', text: 'On foot' }),
+          el('p', { class: 'prose', html: TOUCH
+            ? 'After landing you are standing at eye height. The <b>flight pad</b> walks you over the ground, '
+              + 'drag looks around, and pinch sets your pace. Pick another camera mode to take off again.'
+            : 'After landing you are standing at eye height in <b>Walk</b> mode. <b>W A S D</b> walk, '
+              + '<b>Shift</b> runs, <b>E</b> and <b>Q</b> raise and lower your eye, drag looks around, '
+              + 'and the wheel sets your pace. Pick another camera mode to take off again.' }),
+
+          el('div', { class: 'section-title', text: 'The other camera modes' }),
           el('p', { class: 'prose', html:
             '<b>Orbit</b> circles whatever is selected \u2014 the mode you arrive in. '
             + (TOUCH
@@ -805,24 +822,113 @@ export function createExplorerUI(config) {
     body: [catalogBody],
   }));
 
+  // Browsed by what a thing is rather than by what it belongs to: grouping by
+  // host put every one of four thousand exoplanet systems in a section of its
+  // own, and a black hole or a nebula was a needle in that.
+  const bySubtype = (labels) => Object.entries(labels).map(([id, label]) => ({ id, label, test: (d) => d.subtype === id }));
+  const CATALOG_TABS = [
+    { id: 'solar', label: 'Solar system', test: (d) => d.key === 'sun' || d.kind === 'body' || d.kind === 'moon', sections: true },
+    {
+      id: 'systems', label: 'Star systems', test: (d) => d.kind === 'star' && d.key !== 'sun',
+      chips: [
+        { id: 'planets', label: 'With planets', test: (d) => d.system?.planets?.length > 0 },
+        { id: 'bright', label: 'Bright stars', test: (d) => d.mag != null },
+        { id: 'invented', label: 'In other galaxies', test: (d) => Boolean(d.system?.generated || d.generated) },
+      ],
+    },
+    { id: 'exoplanets', label: 'Exoplanets', test: (d) => d.kind === 'exo-planet' },
+    { id: 'holes', label: 'Black holes', test: (d) => d.kind === 'black-hole' },
+    { id: 'neutron', label: 'Neutron stars', test: (d) => d.kind === 'neutron-star', chips: bySubtype(NEUTRON_LABELS) },
+    { id: 'nebulae', label: 'Nebulae', test: (d) => d.kind === 'nebula', chips: bySubtype(NEBULA_LABELS) },
+    { id: 'clusters', label: 'Star clusters', test: (d) => d.kind === 'cluster', chips: bySubtype(CLUSTER_LABELS) },
+    { id: 'galaxies', label: 'Galaxies', test: (d) => d.kind === 'galaxy' },
+    { id: 'craft', label: 'Spacecraft', test: (d) => d.kind === 'craft' },
+  ];
+  const catalogState = { tab: 'nebulae', chip: null, filter: '', limit: 120 };
+
+  function lightYears(dest) {
+    const ly = dest.distMpc != null ? dest.distMpc * 3.26156e6 : dest.distPc != null ? dest.distPc * 3.26156 : null;
+    if (ly == null) return '';
+    if (ly >= 1e6) return `${(ly / 1e6).toLocaleString(undefined, { maximumFractionDigits: 1 })} million ly`;
+    return `${ly.toLocaleString(undefined, { maximumFractionDigits: ly < 100 ? 1 : 0 })} ly`;
+  }
+
   function buildCatalog() {
-    // Grouped by the catalogue's own grouping, capped per group: the full list is
-    // tens of thousands of entries and belongs to search, not to a browse view.
-    const groups = new Map();
+    const tab = CATALOG_TABS.find((t) => t.id === catalogState.tab) ?? CATALOG_TABS[0];
+    const counts = new Map(CATALOG_TABS.map((t) => [t.id, 0]));
     for (const dest of destinations) {
-      if (!groups.has(dest.group)) groups.set(dest.group, []);
-      groups.get(dest.group).push(dest);
+      for (const t of CATALOG_TABS) if (t.test(dest)) counts.set(t.id, counts.get(t.id) + 1);
     }
-    reconcile(catalogBody, `${groups.size}`, () =>
-      [...groups.entries()].map(([group, entries]) => el('div', { class: 'section' }, [
-        el('div', { class: 'section-title', text: `${group} \u00b7 ${entries.length}` }),
-        el('div', { class: 'catalog-grid' }, entries.slice(0, 60).map((dest) =>
-          el('button', {
-            type: 'button', class: 'btn', text: dest.name,
-            onClick: () => { toggleDialog('catalog', false); hooks.selectTarget(dest.key, { fly: true }); },
-          }))),
-      ])),
-    );
+    const chip = tab.chips?.find((c) => c.id === catalogState.chip) ?? null;
+    const query = catalogState.filter.trim().toLowerCase();
+    const entries = destinations
+      .filter((d) => tab.test(d) && (!chip || chip.test(d)) && (!query || d.name.toLowerCase().includes(query)))
+      .sort((a, b) => (a.distMpc ?? a.distPc ?? Infinity) - (b.distMpc ?? b.distPc ?? Infinity) || a.name.localeCompare(b.name));
+
+    const go = (dest) => { toggleDialog('catalog', false); hooks.selectTarget(dest.key, { fly: true }); };
+    const row = (dest) => el('button', { type: 'button', class: 'catalog-row', onClick: () => go(dest) }, [
+      el('span', { class: 'catalog-name', text: dest.name }),
+      el('span', { class: 'catalog-meta', text: [dest.detail ?? (tab.sections ? null : dest.group), lightYears(dest)].filter(Boolean).join(' \u00b7 ') }),
+    ]);
+    const shown = entries.slice(0, catalogState.limit);
+    let list;
+    if (tab.sections && !query) {
+      const groups = new Map();
+      for (const dest of shown) {
+        if (!groups.has(dest.group)) groups.set(dest.group, []);
+        groups.get(dest.group).push(dest);
+      }
+      list = [...groups.entries()].map(([group, items]) => el('div', { class: 'section' }, [
+        el('div', { class: 'section-title', text: group }),
+        el('div', { class: 'catalog-list' }, items.map(row)),
+      ]));
+    } else {
+      list = el('div', { class: 'catalog-list' }, shown.map(row));
+    }
+
+    const rebuild = (patch) => { Object.assign(catalogState, patch); catalogBody.__sig = null; buildCatalog(); };
+    const filterInput = el('input', {
+      type: 'search', class: 'input catalog-filter', placeholder: `Filter ${tab.label.toLowerCase()}`, value: catalogState.filter,
+      onInput: (event) => {
+        catalogState.filter = event.target.value;
+        catalogState.limit = 120;
+        clearTimeout(filterInput.__timer);
+        filterInput.__timer = setTimeout(() => {
+          rebuild({});
+          const next = catalogBody.querySelector('.catalog-filter');
+          next?.focus();
+          next?.setSelectionRange(next.value.length, next.value.length);
+        }, 140);
+      },
+    });
+    const signature = [tab.id, chip?.id, query, catalogState.limit, entries.length, destinations.length].join('|');
+    reconcile(catalogBody, signature, () => [
+      el('nav', { class: 'catalog-tabs' }, CATALOG_TABS.map((t) => el('button', {
+        type: 'button',
+        class: `catalog-tab${t.id === tab.id ? ' is-active' : ''}`,
+        onClick: () => rebuild({ tab: t.id, chip: null, filter: '', limit: 120 }),
+      }, [el('span', { text: t.label }), el('span', { class: 'catalog-count', text: counts.get(t.id).toLocaleString() })]))),
+      el('div', { class: 'catalog-main' }, [
+        filterInput,
+        tab.chips ? el('div', { class: 'catalog-chips' }, [
+          el('button', { type: 'button', class: `catalog-chip${chip ? '' : ' is-active'}`, text: 'All', onClick: () => rebuild({ chip: null, limit: 120 }) }),
+          ...tab.chips.map((c) => el('button', {
+            type: 'button', class: `catalog-chip${chip?.id === c.id ? ' is-active' : ''}`, text: c.label,
+            onClick: () => rebuild({ chip: c.id, limit: 120 }),
+          })),
+        ]) : null,
+        el('div', { class: 'catalog-results' }, [
+          entries.length ? list : el('div', { class: 'catalog-empty', text: 'Nothing matches.' }),
+          entries.length > shown.length
+            ? el('button', {
+              type: 'button', class: 'btn catalog-more',
+              text: `Show more (${(entries.length - shown.length).toLocaleString()} left)`,
+              onClick: () => rebuild({ limit: catalogState.limit + 240 }),
+            })
+            : null,
+        ]),
+      ]),
+    ]);
   }
 
   // ------------------------------------------------------------------- actions
@@ -849,6 +955,8 @@ export function createExplorerUI(config) {
       case 'land':
         hooks.selectTarget(key, { fly: false });
         controls.descendToSurface();
+        // Straight onto your feet: the landing is where walking starts.
+        if (resolved?.kind === 'body') setCameraMode('walk');
         break;
       case 'onboard':
         hooks.viewFromCraft?.(key);
@@ -875,7 +983,12 @@ export function createExplorerUI(config) {
     // Leaving roam has to hand the target back before anything else reads the
     // distance, since roaming leaves the camera somewhere no bearing describes.
     if (mode !== 'roam' && mode !== 'ship') controls.stopRoam();
-    if (mode === 'orbit') {
+    if (mode !== 'walk') controls.stopWalk();
+    if (mode === 'walk') {
+      controls.trackTarget = false;
+      if (resolveWorld(state.target)?.kind !== 'body') return;
+      controls.startWalk();
+    } else if (mode === 'orbit') {
       controls.mode = 'orbit';
       controls.trackTarget = false;
     } else if (mode === 'free') {
@@ -895,11 +1008,13 @@ export function createExplorerUI(config) {
     // where pressing a key moves you.
     flight.setVisible(mode !== 'orbit');
     flight.setRoaming(mode === 'roam' || mode === 'ship');
+    flight.setWalking(mode === 'walk');
   }
 
   function currentMode() {
     if (controls.pilot && controls.mode === 'roam') return 'ship';
     if (controls.mode === 'roam') return 'roam';
+    if (controls.mode === 'walk') return 'walk';
     if (state.viewFromEarth) return 'orbit';
     if (controls.mode === 'fly') return controls.trackTarget ? 'track' : 'free';
     return 'orbit';
@@ -1105,6 +1220,7 @@ export function createExplorerUI(config) {
   shortcuts.register({ id: 'open.camera', key: 'F6', label: 'Camera panel', group: 'Interface', run: () => togglePanel('camera') });
   shortcuts.register({ id: 'open.system', key: 'F7', label: 'Planetary system', group: 'Interface', run: () => togglePanel('system') });
   shortcuts.register({ id: 'open.bookmarks', key: 'F8', label: 'Bookmarks', group: 'Interface', run: () => togglePanel('bookmarks') });
+  shortcuts.register({ id: 'open.catalog', key: 'C', label: 'Catalog: browse by kind of object', group: 'Interface', run: () => toggleDialog('catalog') });
   shortcuts.register({ id: 'open.display', key: 'F9', label: 'Display panel', group: 'Interface', run: () => togglePanel('display') });
   shortcuts.register({ id: 'open.settings', key: 'F10', label: 'Interface settings', group: 'Interface', run: () => toggleDialog('settings') });
   shortcuts.register({ id: 'toggle.immersive', key: 'F11', label: 'Immersive mode', group: 'Interface', allowInInput: true, run: () => setImmersive(!isImmersive()) });
@@ -1347,9 +1463,10 @@ export function createExplorerUI(config) {
     // Roaming is thrust too, and this reconciliation used to name only 'fly' —
     // so entering roam raised the pad and the next frame took it away again.
     flight.setVisible(
-      !state.viewFromEarth && (controls.mode === 'fly' || controls.mode === 'roam'),
+      !state.viewFromEarth && (controls.mode === 'fly' || controls.mode === 'roam' || controls.mode === 'walk'),
     );
     flight.setRoaming(controls.mode === 'roam');
+    flight.setWalking(controls.mode === 'walk');
     flight.setShip(Boolean(controls.pilot) && controls.mode === 'roam');
     flight.sync();
     if (!quality.panel.root.hidden) quality.update(hooks.qualityStats?.());

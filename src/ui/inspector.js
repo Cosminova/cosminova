@@ -226,6 +226,23 @@ export function describe(resolved, context = {}) {
     };
   }
 
+  if (resolved.kind === 'nebula' || resolved.kind === 'cluster' || resolved.kind === 'neutron-star') {
+    const s = resolved.spec;
+    const className = resolved.dest?.detail ?? 'Deep-sky object';
+    add('Class', className, true);
+    add('Distance from Sun', `${num(s.distPc, 0)} pc \u00b7 ${num(s.distPc * 3.26156, 0)} ly`);
+    if (s.radiusPc) add('Radius', `${num(s.radiusPc * 3.26156, s.radiusPc < 1 ? 2 : 0)} ly`);
+    if (s.stars) add('Stars drawn', num(s.stars));
+    if (s.ageMyr) add('Age', s.ageMyr < 1000 ? `${num(s.ageMyr, s.ageMyr < 10 ? 1 : 0)} million years` : `${num(s.ageMyr / 1000, 1)} billion years`);
+    if (resolved.kind === 'neutron-star') {
+      add('Radius', '12 km');
+      add('Spin period', s.periodS < 1 ? `${num(s.periodS * 1000, 2)} ms` : `${num(s.periodS, 2)} s`);
+      if (s.periodS < 0.7) add('Shown spinning', 'Slowed to 0.7 s per turn so the beams can be followed', true);
+    }
+    add('Data', 'Position, distance and size catalogued; appearance procedural', true);
+    return { title: resolved.name, className, kind: resolved.kind, rows };
+  }
+
   if (resolved.kind === 'star') {
     const dest = resolved.dest ?? {};
     const system = dest.system;
