@@ -24,8 +24,11 @@ export const VIEW_GROUPS = [
         title: 'Names of catalogue stars. Off by default — at any distance from '
           + 'the sun there are enough of them to cover the sky in text.',
       },
-      { key: 'labelGalaxies', label: 'Galaxies', default: true },
-      { key: 'labelBlackHoles', label: 'Black holes', default: true },
+      // Off, like the stars. Out in space the sky is the thing being looked at,
+      // and a name over every galaxy in it reads as a chart rather than a view.
+      // The one selected is still named in the inspector.
+      { key: 'labelGalaxies', label: 'Galaxies', default: false },
+      { key: 'labelBlackHoles', label: 'Black holes', default: false },
       { key: 'labelCraft', label: 'Spacecraft', default: true },
       { key: 'labelExo', label: 'Exoplanets', default: true },
     ],

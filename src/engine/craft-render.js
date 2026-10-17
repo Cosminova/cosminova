@@ -372,11 +372,7 @@ export function createCraftRenderer(field) {
 
       for (const state of field.list) {
         if (!state.present) continue;
-        if (frame && frame.key && state.centreKey === frame.key) {
-          rel.copy(state.local).sub(frame.offset);
-        } else {
-          rel.copy(state.position).sub(cameraWorld);
-        }
+        if (!frame?.relative(rel, state.centreKey ?? null, state.local)) rel.copy(state.position).sub(cameraWorld);
         const distance = rel.length();
         if (!(distance > 0)) continue;
         const sizeKm = (state.spec.sizeM ?? 5) / 1000;
@@ -428,11 +424,7 @@ export function createCraftRenderer(field) {
         trajectory.rebase(cameraWorld);
         const state = field.get(selectedKey);
         if (state?.present) {
-          if (frame && frame.key && state.centreKey === frame.key) {
-            rel.copy(state.local).sub(frame.offset);
-          } else {
-            rel.copy(state.position).sub(cameraWorld);
-          }
+          if (!frame?.relative(rel, state.centreKey ?? null, state.local)) rel.copy(state.position).sub(cameraWorld);
           if (showVectors) velocity.set(rel, state.velocity, Math.max(distanceScale(rel.length()), 0));
           else velocity.clear();
         } else {

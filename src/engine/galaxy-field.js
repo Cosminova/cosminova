@@ -189,6 +189,13 @@ function powerLaw(random, lo, hi) {
   return 1 / (1 / lo - u * (1 / lo - 1 / hi));
 }
 
+const _pick = new Vector3();
+
+function smoothstep(a, b, x) {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
 const OLD = [1.0, 0.84, 0.62];
 const YOUNG = [0.74, 0.82, 1.0];
 const MIXED = [0.9, 0.86, 0.8];
@@ -216,9 +223,77 @@ export class GalaxyField {
     for (const level of this.levels) {
       level.layer.points.material.uniforms.uHide.value.set(level.hide * 0.82, level.hide);
     }
-    this.objects = [this.near.points, ...this.levels.map((l) => l.layer.points)];
+    /**
+     * Galaxies that were picked out of the field to be visited. Each is drawn
+     * here at every distance, because the level it came from hands over to
+     * finer ones on the way in and none of those has it.
+     */
+    this.pinned = makeLayer(256, { refMag: REF_MAG, gain: 1, resolved: POINT_HANDOVER_PX });
+    this._pinnedList = [];
+    this._pinnedAt = new Vector3(Infinity, 0, 0);
+    /** `level|cell|index` of field points that a pinned galaxy now stands for. */
+    this._hidden = new Set();
+    this.objects = [this.near.points, this.pinned.points, ...this.levels.map((l) => l.layer.points)];
     this._cam = new Vector3();
     this.visible = true;
+  }
+
+  /**
+   * Draw these galaxies wherever the camera is; see `pinned`.
+   * @param {{x:number,y:number,z:number,absMag:number,radiusMpc:number,colour:number[]}[]} list world Mpc
+   */
+  setPinned(list) {
+    this._pinnedList = list.slice(0, this.pinned.capacity);
+    this._pinnedAt.set(Infinity, 0, 0);
+  }
+
+  /** Stop drawing one field point, by the id `forEachPoint` gave it. */
+  hidePoint(id) {
+    if (this._hidden.has(id)) return;
+    this._hidden.add(id);
+    const level = this.levels[Number(id.split('|')[0])];
+    if (level) level.dirty = true;
+  }
+
+  /**
+   * Every field point being drawn, for picking one out with the pointer, with
+   * the brightness the shader gives it (0-1.6). `visit` gets a stable id, the
+   * level, the camera-relative position in Mpc, the brightness and the
+   * point's record: absolute magnitude, radius in Mpc and colour.
+   */
+  forEachPoint(cameraWorld, cssPerRad, visit) {
+    const cam = _pick.copy(cameraWorld).multiplyScalar(1 / MPC_KM);
+    for (const level of this.levels) {
+      if (!level.layer.points.visible) continue;
+      const gain = level.layer.points.material.uniforms.uGain.value;
+      const [sunIn, sunOut] = level.index === 0 ? CATALOGUE_FADE_MPC : [0, 0];
+      for (const [cellKey, cell] of level.cells) {
+        for (let p = 0, q = 0; p < cell.length; p += 8, q++) {
+          const x = cell[p] - cam.x;
+          const y = cell[p + 1] - cam.y;
+          const z = cell[p + 2] - cam.z;
+          const d = Math.max(Math.hypot(x, y, z), 1e-7);
+          const radius = cell[p + 4];
+          const px = (2 * radius / d) * cssPerRad;
+          let shown = smoothstep(level.hide * 0.82, level.hide, d) * (1 - smoothstep(POINT_HANDOVER_PX[0], POINT_HANDOVER_PX[1], px));
+          if (sunOut) shown *= smoothstep(sunIn, sunOut, Math.hypot(cell[p], cell[p + 1], cell[p + 2]));
+          if (shown < 0.05) continue;
+          const id = `${level.index}|${cellKey}|${q}`;
+          if (this._hidden.has(id)) continue;
+          const m = cell[p + 3] + 5 * Math.log10(d * 1e6) - 5;
+          const redshift = d / HUBBLE_MPC;
+          const flux = 10 ** (0.4 * (REF_MAG - m)) / ((1 + redshift) * (1 + redshift));
+          const size = Math.min(Math.max(px, 2.6), 96);
+          const brightness = Math.min(gain * Math.sqrt(flux) * (2.6 * 2.6) / (size * size), 1.6) * shown;
+          if (brightness < 0.02) continue;
+          visit(id, level.index, x, y, z, brightness, {
+            absMag: cell[p + 3],
+            radiusMpc: radius,
+            colour: [cell[p + 5], cell[p + 6], cell[p + 7]],
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -306,8 +381,9 @@ export class GalaxyField {
     const a = layer.arrays;
     const anchor = layer.anchor;
     let n = 0;
-    for (const cell of level.cells.values()) {
-      for (let p = 0; p < cell.length && n < layer.capacity; p += 8, n++) {
+    for (const [cellKey, cell] of level.cells) {
+      for (let p = 0, q = 0; p < cell.length && n < layer.capacity; p += 8, q++) {
+        if (this._hidden.size && this._hidden.has(`${level.index}|${cellKey}|${q}`)) continue;
         a.position[n * 3] = cell[p] - anchor.x;
         a.position[n * 3 + 1] = cell[p + 1] - anchor.y;
         a.position[n * 3 + 2] = cell[p + 2] - anchor.z;
@@ -316,6 +392,7 @@ export class GalaxyField {
         a.aColor[n * 3] = cell[p + 5];
         a.aColor[n * 3 + 1] = cell[p + 6];
         a.aColor[n * 3 + 2] = cell[p + 7];
+        n++;
       }
     }
     layer.commit(n);
@@ -368,7 +445,25 @@ export class GalaxyField {
       }
     }
 
-    for (const layer of [this.near, ...this.levels.map((l) => l.layer)]) {
+    // Re-anchored on the camera whenever it has moved a good way, so a pinned
+    // galaxy a gigaparsec off is still placed to well under a pixel.
+    if (this._pinnedAt.distanceTo(cam) > 1) {
+      this._pinnedAt.copy(cam);
+      const layer = this.pinned;
+      layer.anchor.copy(cam);
+      const a = layer.arrays;
+      this._pinnedList.forEach((g, q) => {
+        a.position[q * 3] = g.x - cam.x;
+        a.position[q * 3 + 1] = g.y - cam.y;
+        a.position[q * 3 + 2] = g.z - cam.z;
+        a.aAbsMag[q] = g.absMag;
+        a.aRadius[q] = g.radiusMpc;
+        a.aColor.set(g.colour, q * 3);
+      });
+      layer.commit(this._pinnedList.length);
+    }
+
+    for (const layer of [this.near, this.pinned, ...this.levels.map((l) => l.layer)]) {
       const u = layer.points.material.uniforms;
       u.uAnchor.value.copy(layer.anchor).sub(cam);
       u.uAnchorWorld.value.copy(layer.anchor);

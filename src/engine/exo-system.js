@@ -9,6 +9,7 @@ import { equatorialToVector } from '../astro.js';
 
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 const IDENTITY = new Quaternion();
+const ZERO = Object.freeze(new Vector3());
 
 /**
  * The key a planet or moon of another star is known by, everywhere.
@@ -220,6 +221,15 @@ export class ExoSystem {
     }
   }
 
+  /**
+   * Positions every body for a date.
+   *
+   * Each body keeps `local`, its offset from the host star, as well as `world`.
+   * The world position is the host's plus that offset, and ten megaparsecs out
+   * a double is spaced 65,000 kilometres apart, so the sum rounds a planet's
+   * orbit to that grid and anything drawn from it shakes as the camera moves.
+   * The local offsets stay exact; see `localOf`.
+   */
   place(date, cameraWorld) {
     const days = date.getTime() / 86400000;
     const host = this.position;
@@ -228,24 +238,30 @@ export class ExoSystem {
       const angle = item.angle0 + (days / item.spec.orbitDays) * Math.PI * 2;
       const r = item.spec.orbitKm;
       const incl = ((item.spec.tiltDeg * Math.PI) / 180) * 0.15;
-      const x = host.x + r * Math.cos(angle);
-      const y = host.y + r * Math.sin(angle) * Math.sin(incl);
-      const z = host.z + r * Math.sin(angle) * Math.cos(incl);
-      item.planet.group.position.set(x - cameraWorld.x, y - cameraWorld.y, z - cameraWorld.z);
+      item.local = item.local || new Vector3();
+      item.local.set(r * Math.cos(angle), r * Math.sin(angle) * Math.sin(incl), r * Math.sin(angle) * Math.cos(incl));
       item.world = item.world || new Vector3();
-      item.world.set(x, y, z);
+      item.world.copy(host).add(item.local);
+      item.planet.group.position.copy(item.world).sub(cameraWorld);
       for (const moon of item.moons) {
         const ma = moon.angle0 + (days / moon.spec.orbitDays) * Math.PI * 2;
         const mr = moon.spec.orbitKm;
         const mIncl = ((moon.spec.inclinationDeg ?? 0) * Math.PI) / 180;
-        const mx = x + mr * Math.cos(ma);
-        const my = y + mr * Math.sin(ma) * Math.sin(mIncl);
-        const mz = z + mr * Math.sin(ma) * Math.cos(mIncl);
-        moon.planet.group.position.set(mx - cameraWorld.x, my - cameraWorld.y, mz - cameraWorld.z);
+        moon.local = moon.local || new Vector3();
+        moon.local.set(mr * Math.cos(ma), mr * Math.sin(ma) * Math.sin(mIncl), mr * Math.sin(ma) * Math.cos(mIncl)).add(item.local);
         moon.world = moon.world || new Vector3();
-        moon.world.set(mx, my, mz);
+        moon.world.copy(host).add(moon.local);
+        moon.planet.group.position.copy(moon.world).sub(cameraWorld);
       }
     }
+  }
+
+  /** A body's exact offset from the host star, or null if it is not one of this system's. */
+  localOf(key) {
+    if (key === this.key) return ZERO;
+    for (const item of this.planets) if (item.spec.key === key) return item.local ?? null;
+    for (const moon of this.moons) if (moon.spec.key === key) return moon.local ?? null;
+    return null;
   }
 
   /**

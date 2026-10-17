@@ -201,6 +201,11 @@ const DISC = [0.94, 0.88, 0.8];
 const YOUNG = [0.6, 0.74, 1.0];
 const HII = [1.0, 0.42, 0.58];
 
+function smoothstep(a, b, x) {
+  const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+  return t * t * (3 - 2 * t);
+}
+
 function mixColour(a, b, t) {
   return [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t];
 }
@@ -434,6 +439,42 @@ export class GalaxySprites {
   dimFor(key) {
     for (const slot of this.slots) if (slot.frame?.key === key) return 1 - slot.fade;
     return 1;
+  }
+
+  /**
+   * Every individual star being drawn, for picking one out with the pointer.
+   * `visit` gets the galaxy, the star's index in it, its camera-relative
+   * position in km and how brightly it is drawn (0-1). The index is stable:
+   * a galaxy's layers are rebuilt from its seed in the same order every time.
+   */
+  forEachStar(cameraWorld, visit) {
+    for (const slot of this.slots) {
+      const points = slot.stars.points;
+      if (!points.visible || !slot.frame) continue;
+      const f = slot.frame;
+      const u = points.material.uniforms;
+      const gain = u.uGain.value;
+      const nearKm = u.uNearKm.value;
+      const p = slot.stars.arrays.position;
+      const c = slot.stars.arrays.aColor;
+      const cx = f.center.x - cameraWorld.x;
+      const cy = f.center.y - cameraWorld.y;
+      const cz = f.center.z - cameraWorld.z;
+      for (let q = 0, n = points.geometry.drawRange.count; q < n; q++) {
+        const x = p[q * 3] * PC_KM;
+        const y = p[q * 3 + 1] * PC_KM;
+        const z = p[q * 3 + 2] * PC_KM;
+        const rx = cx + f.u.x * x + f.w.x * y + f.n.x * z;
+        const ry = cy + f.u.y * x + f.w.y * y + f.n.y * z;
+        const rz = cz + f.u.z * x + f.w.z * y + f.n.z * z;
+        const dist = Math.max(Math.hypot(rx, ry, rz), 1);
+        const pc = dist / PC_KM;
+        const peak = (Math.max(c[q * 3], c[q * 3 + 1], c[q * 3 + 2]) * gain) / (pc * pc);
+        const shown = smoothstep(0.006, 0.03, peak) * smoothstep(nearKm, nearKm * 3, dist) * u.uOpacity.value;
+        if (shown < 0.05) continue;
+        visit(f, q, rx, ry, rz, shown, Math.max(c[q * 3], c[q * 3 + 1], c[q * 3 + 2]));
+      }
+    }
   }
 
   /** Fade of the slot drawing this galaxy, 0 when none is. */

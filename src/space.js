@@ -9,6 +9,7 @@ import {
   ACESFilmicToneMapping,
   Color,
   Group,
+  Matrix4,
   Mesh,
   MeshBasicMaterial,
   PerspectiveCamera,
@@ -60,7 +61,7 @@ import { CraftField } from './engine/craft-motion.js';
 import { createCraftRenderer } from './engine/craft-render.js';
 import { CRAFT_KINDS, DATA_TIERS } from './engine/craft-missions.js';
 import {
-  AU_KM, EARTH_RADIUS_KM, formatDistance, PC_KM, SOLAR_RADIUS_KM, equatorialToEcliptic,
+  AU_KM, EARTH_RADIUS_KM, formatDistance, MPC_KM, PC_KM, SOLAR_RADIUS_KM, equatorialToEcliptic,
 } from './engine/units.js';
 import { equatorialToVector, vectorToEquatorial } from './astro.js';
 import { Cosmos } from './engine/cosmos.js';
@@ -1446,8 +1447,16 @@ function formatAu(au) {
 }
 
 controls.onClick = (x, y) => {
-  const hit = pick(x, y);
-  if (hit) selectTarget(hit, { fly: true });
+  const hit = pickNamed(x, y);
+  const dot = pickDot(x, y);
+  // A named thing wins a near tie: a craft marker drawn over a bright star is
+  // the craft being clicked.
+  if (dot && (!hit || dot.score < hit.score - 2)) {
+    const key = destinationForDot(dot.dot);
+    if (key) selectTarget(key, { fly: true });
+    return;
+  }
+  if (hit) selectTarget(hit.key, { fly: true });
 };
 
 /**
@@ -1692,7 +1701,34 @@ function applyUniformOverride(uniform, value) {
  * under it, so where the camera was built from a known offset to a known object,
  * the offset is carried through instead of the subtraction.
  */
-const cameraFrame = { key: null, offset: new Vector3() };
+const cameraFrame = {
+  key: null,
+  offset: new Vector3(),
+  /**
+   * Where something belonging to body `frameKey`, at `local` from its centre,
+   * is relative to the camera, worked out without the absolute positions; or
+   * null when that cannot be done exactly.
+   *
+   * Besides the body the camera is anchored to, this covers every other body
+   * of a visited system: each holds its exact offset from the host star, so a
+   * moon seen from its planet is the difference of two small vectors as well.
+   * Ten megaparsecs out a double is spaced 65,000 kilometres apart, and
+   * subtracting there shook the planets back and forth as the camera turned.
+   */
+  relative(out, frameKey, local = null) {
+    if (frameKey === null || this.key === null) return null;
+    if (frameKey === this.key) {
+      if (local) return out.copy(local).sub(this.offset);
+      return out.copy(this.offset).negate();
+    }
+    const there = exoSystem?.localOf(frameKey);
+    const here = there && exoSystem.localOf(this.key);
+    if (!here) return null;
+    out.copy(there).sub(here).sub(this.offset);
+    if (local) out.add(local);
+    return out;
+  },
+};
 
 function updateCameraFrame() {
   const origin = controls.originKey;
@@ -1720,10 +1756,7 @@ function updateCameraFrame() {
  * of from two large ones, which is the whole difference at interstellar range.
  */
 function renderOffset(out, world, frameKey = null, local = null) {
-  if (frameKey !== null && frameKey === cameraFrame.key) {
-    if (local) return out.copy(local).sub(cameraFrame.offset);
-    return out.copy(cameraFrame.offset).negate();
-  }
+  if (cameraFrame.relative(out, frameKey, local)) return out;
   return out.set(
     world.x - controls.worldPosition.x,
     world.y - controls.worldPosition.y,
@@ -2142,10 +2175,11 @@ function starIdentity(c) {
   return c.kind === 'gen' ? `g${c.seed}` : c.kind === 'hyg' ? `h${c.index}` : c.kind === 'gaia' ? `a${c.index}` : c.dest.key;
 }
 
+/** Loads the system of a star found near the camera or clicked on, and returns its key. */
 function activateStar(c) {
   if (c.kind === 'real') {
     maybeLoadExo(c.dest.key);
-    return;
+    return c.dest.key;
   }
   const identity = starIdentity(c);
   let key = liveStarKeys.get(identity);
@@ -2172,6 +2206,7 @@ function activateStar(c) {
   maybeLoadExo(key);
   if (c.kind === 'gen') cosmos.hideStar(c.seed);
   else if (c.kind === 'gaia') gaia?.hide(c.index);
+  return key;
 }
 
 /** Inverse of deep-field's morphCode. */
@@ -2312,11 +2347,17 @@ function setShip(enabled) {
 
 /** The camera in a body's own frame, exactly where the camera is anchored to it. */
 function cameraLocalIn(world, key, out) {
-  if (key !== null && key === cameraFrame.key) return out.copy(cameraFrame.offset);
+  if (cameraFrame.relative(out, key)) return out.negate();
   return out.copy(controls.worldPosition).sub(world);
 }
 
+/** The named thing under the pointer, as a key: what hover and the context menu ask for. */
 function pick(clientX, clientY) {
+  return pickNamed(clientX, clientY)?.key ?? null;
+}
+
+/** The named thing under the pointer and how good a hit it is, lower being better. */
+function pickNamed(clientX, clientY) {
   const width = renderer.domElement.clientWidth;
   const height = renderer.domElement.clientHeight;
   const nx = (clientX / width) * 2 - 1;
@@ -2349,7 +2390,7 @@ function pick(clientX, clientY) {
     consider(key, universe.get(key).position, planet.radius, 0, key);
   }
   if (exoSystem) {
-    consider(exoSystem.key, exoSystem.position, exoSystem.star.radius);
+    consider(exoSystem.key, exoSystem.position, exoSystem.star.radius, 0, exoSystem.key);
     for (const item of exoSystem.planets) {
       if (item.world) consider(item.spec.key, item.world, item.spec.radiusKm, 0, item.spec.key);
     }
@@ -2359,6 +2400,11 @@ function pick(clientX, clientY) {
   }
   for (const dest of destinations) {
     if (dest.kind !== 'star' && dest.kind !== 'galaxy' && dest.kind !== 'black-hole') continue;
+    // Invented systems carry no catalogue distance or magnitude, so the test
+    // below let every one of them through: the eight stars of a galaxy ten
+    // megaparsecs off, drawn nowhere, could be clicked from anywhere they
+    // happened to project. What is drawn of them is a point, and pickDot has those.
+    if (dest.kind === 'star' && (dest.generated || dest.system?.generated || dest.distPc === undefined) && dest.key !== state.target) continue;
     if (dest.kind === 'star' && dest.distPc > 30 && dest.mag > 1.5) continue;
     const resolved = resolveWorld(dest.key);
     if (resolved) consider(dest.key, resolved.position, resolved.radius);
@@ -2376,7 +2422,142 @@ function pick(clientX, clientY) {
       item.state.local,
     );
   }
-  return best;
+  return best ? { key: best, score: bestScore } : null;
+}
+
+/**
+ * How near the pointer a point of light has to be to count as clicked, in
+ * CSS pixels. A star is drawn a pixel or two across, and a finger is not that
+ * accurate, so this is generous; the brighter of two nearby points wins.
+ */
+const DOT_PICK_PX = 11;
+const tmpViewProjection = new Matrix4();
+
+/**
+ * The point of light under the pointer, whatever drew it.
+ *
+ * `pick` knows the things with names. Most of what is on screen has none:
+ * the stars of the galaxy you are flying through, the brightest stars of one
+ * seen from outside, the far galaxies of the field. Every one of those is a
+ * place in this universe — a star unfolds into a planetary system when you
+ * reach it, a far galaxy into a billboard, sprites and stars of its own — so
+ * every one can be clicked, and what is clicked becomes a destination.
+ *
+ * Each source is tested the way it is drawn: a point only counts if its own
+ * shader would actually put light on screen, so clicking black space does
+ * nothing and a star too faint to see cannot be hit by accident.
+ */
+function pickDot(clientX, clientY) {
+  const width = renderer.domElement.clientWidth;
+  const height = renderer.domElement.clientHeight;
+  camera.updateMatrixWorld();
+  const e = tmpViewProjection.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse).elements;
+  const cam = controls.worldPosition;
+  let best = null;
+  let bestScore = DOT_PICK_PX;
+  const test = (x, y, z, bonus) => {
+    const w = e[3] * x + e[7] * y + e[11] * z + e[15];
+    if (!(w > 0)) return false;
+    const sx = ((e[0] * x + e[4] * y + e[8] * z + e[12]) / w * 0.5 + 0.5) * width;
+    const sy = (0.5 - (e[1] * x + e[5] * y + e[9] * z + e[13]) / w * 0.5) * height;
+    const d = Math.hypot(sx - clientX, sy - clientY);
+    if (d > DOT_PICK_PX) return false;
+    const score = d - bonus;
+    if (score >= bestScore) return false;
+    bestScore = score;
+    return true;
+  };
+  const limit = deepField.starMaterial.uniforms.limitMagnitude.value;
+  const starBonus = (absMag, distKm) => {
+    const rel = limit - (absMag + 5 * Math.log10(Math.max(distKm / PC_KM, 1e-8)) - 5);
+    return rel < -0.8 ? null : clamp(rel, 0, 4);
+  };
+
+  // The stars generated for the galaxy the camera is in.
+  if (cosmos.starPoints.visible) {
+    const w = cosmos.world;
+    for (let q = 0; q < cosmos.count; q++) {
+      if (cosmos.absMag[q] > 90) continue;
+      const x = w[q * 3] - cam.x;
+      const y = w[q * 3 + 1] - cam.y;
+      const z = w[q * 3 + 2] - cam.z;
+      const bonus = starBonus(cosmos.absMag[q], Math.hypot(x, y, z));
+      if (bonus === null || !test(x, y, z, bonus)) continue;
+      best = {
+        kind: 'gen',
+        seed: cosmos.seeds[q],
+        absMag: cosmos.absMag[q],
+        world: new Vector3(w[q * 3], w[q * 3 + 1], w[q * 3 + 2]),
+        galaxy: cosmos.active,
+      };
+    }
+  }
+  // The catalogue and Gaia, near home.
+  if (deepField.stars.visible) {
+    const w = deepField.world;
+    for (let i = 0; i < deepField.count; i++) {
+      const x = w[i * 3] - cam.x;
+      const y = w[i * 3 + 1] - cam.y;
+      const z = w[i * 3 + 2] - cam.z;
+      const bonus = starBonus(deepField.absMag[i], Math.hypot(x, y, z));
+      if (bonus === null || !test(x, y, z, bonus)) continue;
+      best = { kind: 'hyg', index: i, absMag: deepField.absMag[i], bv: data.catalog.colorIndex[i], world: new Vector3(w[i * 3], w[i * 3 + 1], w[i * 3 + 2]) };
+    }
+  }
+  if (gaia?.points.visible) {
+    const p = gaia.position;
+    for (let i = 0; i < gaia.count; i++) {
+      if (gaia.absMag[i] > 90) continue;
+      const x = p[i * 3] - cam.x;
+      const y = p[i * 3 + 1] - cam.y;
+      const z = p[i * 3 + 2] - cam.z;
+      const bonus = starBonus(gaia.absMag[i], Math.hypot(x, y, z));
+      if (bonus === null || !test(x, y, z, bonus)) continue;
+      best = { kind: 'gaia', index: i, absMag: gaia.absMag[i], bv: gaia.bv[i], world: new Vector3(p[i * 3], p[i * 3 + 1], p[i * 3 + 2]) };
+    }
+  }
+  // The brightest stars of a galaxy seen from outside it.
+  cosmos.sprites.forEachStar(cam, (frame, index, x, y, z, shown, lum) => {
+    if (!test(x, y, z, shown * 3)) return;
+    best = {
+      kind: 'gen',
+      seed: (Math.imul(frame.seed ^ 0x51a75, 0x9e3779b1) + Math.imul(index + 1, 0x85ebca6b)) >>> 0,
+      // Supergiants: these are the stars that show from a galaxy away.
+      absMag: clamp(-3.5 - 2.5 * Math.log10(lum / 0.08), -9.5, -3.5),
+      world: new Vector3(cam.x + x, cam.y + y, cam.z + z),
+      galaxy: frame,
+    };
+  });
+  // Generated galaxies: those near enough to have been made in full.
+  const pxPerRad = height / (camera.fov * Math.PI / 180);
+  for (const g of cosmos.galaxyList) {
+    if (g.kind !== 'generated') continue;
+    const x = g.center.x - cam.x;
+    const y = g.center.y - cam.y;
+    const z = g.center.z - cam.z;
+    const px = (g.radiusKm / Math.max(Math.hypot(x, y, z), 1)) * pxPerRad;
+    if (px < 0.5) continue;
+    if (!test(x, y, z, Math.min(px, 30) * 0.35 + 1)) continue;
+    best = { kind: 'galaxy', frame: g };
+  }
+  // And the field beyond them.
+  cosmos.field.forEachPoint(cam, pxPerRad, (id, level, x, y, z, brightness, record) => {
+    if (!test(x * MPC_KM, y * MPC_KM, z * MPC_KM, brightness * 2)) return;
+    best = { kind: 'field', id, level, world: { x: cam.x / MPC_KM + x, y: cam.y / MPC_KM + y, z: cam.z / MPC_KM + z }, record };
+  });
+  return best ? { dot: best, score: bestScore } : null;
+}
+
+/** Makes a picked point of light a destination, and returns its key. */
+function destinationForDot(dot) {
+  if (dot.kind === 'galaxy' || dot.kind === 'field') {
+    const g = dot.kind === 'field' ? cosmos.pinFieldGalaxy(dot.id, dot.level, dot.world, dot.record) : dot.frame;
+    addLive({ key: g.key, name: g.name, kind: 'galaxy', group: 'Uncharted galaxies', cosmic: g });
+    return g.key;
+  }
+  // A survey star that is a known planetary system is that system.
+  const real = dot.kind === 'gen' ? null : nearestRealSystem(dot.world);
+  return activateStar(real && real.distanceKm < 0.05 * PC_KM ? real : dot);
 }
 
 /**
@@ -2396,10 +2577,10 @@ const labelItems = [];
 const labelOffsets = [];
 let labelOffsetsUsed = 0;
 function labelOffset(world, frameKey, local = null) {
-  if (frameKey !== cameraFrame.key) return null;
   const out = labelOffsets[labelOffsetsUsed] ?? (labelOffsets[labelOffsetsUsed] = new Vector3());
+  if (!cameraFrame.relative(out, frameKey, local)) return null;
   labelOffsetsUsed++;
-  return renderOffset(out, world, frameKey, local);
+  return out;
 }
 
 /**
@@ -2454,6 +2635,7 @@ function collectLabelItems() {
       key: exoSystem.key,
       name: exoSystem.system.host,
       position: exoSystem.position,
+      offset: labelOffset(exoSystem.position, exoSystem.key),
       radius: exoSystem.star.radius,
       major: true,
     });
@@ -2482,17 +2664,21 @@ function collectLabelItems() {
       }
     }
   }
+  // Stars, galaxies and holes are named only when their names are switched on,
+  // the selection included: out in open space a name hanging in the sky over
+  // the thing you flew to is in the way, and the inspector already says what
+  // it is.
   for (const dest of destinations) {
     const selected = dest.key === targetKey;
     if (dest.kind === 'star') {
-      if (!shown.stars && !selected) continue;
+      if (!shown.stars) continue;
       // Naked-eye stars and anything within ten parsecs; the rest are points
       // that a label would only obscure.
       if (!(dest.mag <= 2.2 || dest.distPc <= 10) && !selected) continue;
     } else if (dest.kind === 'galaxy') {
-      if (!shown.galaxies && !selected) continue;
+      if (!shown.galaxies) continue;
     } else if (dest.kind === 'black-hole') {
-      if (!shown.blackHoles && !selected) continue;
+      if (!shown.blackHoles) continue;
     } else {
       continue;
     }
@@ -2879,8 +3065,9 @@ function frame(now) {
 
   if (exoSystem) {
     exoSystem.place(state.date, cam);
-    const hostDist = cam.distanceTo(exoSystem.position);
-    tmpCameraLocal.copy(cam).sub(exoSystem.position);
+    placeRelative(exoSystem.star.group, exoSystem.position, exoSystem.key);
+    cameraLocalIn(exoSystem.position, exoSystem.key, tmpCameraLocal);
+    const hostDist = tmpCameraLocal.length();
     // Exposure adapts to the orbit being visited, exactly as it does at home,
     // so a world taking hundreds of Earths' flux reads as a lit planet rather
     // than a white disc.
@@ -2891,6 +3078,7 @@ function frame(now) {
       time: now / 1000,
       distanceKm: hostDist,
       pixelsPerRadian,
+      visibility: pointVisibility(hostLum, hostDist, 8.7 + 2.5 * Math.log10(Math.max(58 / Math.max(camera.fov, 1e-4), 1))),
       brightness: exoSunIntensity(
         exoFlux(hostLum, hostDist / 149597870.7),
         exoReference,
@@ -2913,7 +3101,7 @@ function frame(now) {
         item.planet.calibrateSeaLevel(renderer, item.spec.oceanFraction);
       }
       placeRelative(item.planet.group, item.world, item.spec.key);
-      tmpSunLocal.copy(exoSystem.position).sub(item.world).normalize();
+      tmpSunLocal.copy(item.local).negate().normalize();
       tmpViewLocal.copy(tmpViewDir).normalize();
       const au = item.spec.orbitKm / 149597870.7;
       patchTotal += item.planet.update({
@@ -2936,8 +3124,8 @@ function frame(now) {
       moon.planet.group.visible = apparentPixels > 0.7;
       if (!moon.planet.group.visible) continue;
       placeRelative(moon.planet.group, moon.world, moon.spec.key);
-      tmpSunLocal.copy(exoSystem.position).sub(moon.world).normalize();
-      const au = moon.world.distanceTo(exoSystem.position) / 149597870.7;
+      tmpSunLocal.copy(moon.local).negate().normalize();
+      const au = moon.local.length() / 149597870.7;
       patchTotal += moon.planet.update({
         cameraLocal: tmpCameraLocal,
         sunLocal: tmpSunLocal,
@@ -3255,6 +3443,11 @@ window.cosminova = {
   setRate(rate) {
     state.timeRate = rate;
     state.playing = rate !== 0;
+  },
+  /** A click at canvas CSS coordinates, as the pointer gives it; returns the new target. */
+  click(x, y) {
+    controls.onClick(x, y);
+    return state.target;
   },
   /** Goes there the way pressing a destination does, framing and all. */
   travel(key, { duration = 3200 } = {}) {

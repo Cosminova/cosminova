@@ -16,6 +16,17 @@ import { VIEW_DEFAULTS } from './view-options.js';
 
 const KEY = 'skyview.ui.v1';
 
+/**
+ * Bumped when a default changes that saved preferences would otherwise hide.
+ * Every value is written back on the first change, defaults included, so a
+ * new default never reaches anyone who has used the app before; each entry
+ * here resets the named view keys once, for files older than its version.
+ */
+const VIEW_VERSION = 2;
+const VIEW_RESETS = {
+  2: ['labelGalaxies', 'labelBlackHoles'],
+};
+
 export const DEFAULTS = {
   scale: 1,
   alpha: 0.72,
@@ -54,6 +65,7 @@ export const DEFAULTS = {
   // find in these defaults — so an undeclared flag is written on dismissal,
   // discarded on load, and the card greets you again every single visit.
   seenIntro: false,
+  viewVersion: VIEW_VERSION,
   collapsed: {},
   // Labelled to begin with. Eleven icons down the side of the screen are only
   // legible to someone who already knows what they open — a compass and a
@@ -101,7 +113,13 @@ function merge(base, saved) {
 export function createPrefs() {
   let values;
   try {
-    values = merge(DEFAULTS, JSON.parse(localStorage.getItem(KEY) || '{}'));
+    const saved = JSON.parse(localStorage.getItem(KEY) || '{}');
+    values = merge(DEFAULTS, saved);
+    const from = Number(saved?.viewVersion) || 1;
+    for (let version = from + 1; version <= VIEW_VERSION; version++) {
+      for (const key of VIEW_RESETS[version] ?? []) values.view[key] = VIEW_DEFAULTS[key];
+    }
+    values.viewVersion = VIEW_VERSION;
   } catch {
     // Private browsing, a full quota, or a value written by an older build with
     // an incompatible shape. None of those are worth failing to start over.

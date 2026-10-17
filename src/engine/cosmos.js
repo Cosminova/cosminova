@@ -114,6 +114,8 @@ export class Cosmos {
     this.milkyWay = this._milkyWayFrame();
     this.catalogFrames = new Map();
     this.generatedGalaxies = new Map();
+    /** Galaxies taken from the far field to be visited; see pinFieldGalaxy. */
+    this.pinned = new Map();
     this.galaxyCells = new Map();
     this.starCells = new Map();
     this.active = null;
@@ -243,6 +245,7 @@ export class Cosmos {
     );
     const list = this._catalogPoints.slice();
     for (const g of this.galaxyList) {
+      if (g.pinned) continue;
       list.push({
         x: g.center.x / MPC_KM,
         y: g.center.y / MPC_KM,
@@ -588,11 +591,80 @@ export class Cosmos {
     return { key, galaxies };
   }
 
+  /**
+   * Makes a galaxy out of a point of the far field, so it can be visited.
+   *
+   * The field is only light: a level's points stand for galaxies too far off
+   * to need any more than that, and on the way in the level hands over to
+   * finer ones that never had this galaxy in them. A pinned galaxy is real
+   * from then on — a billboard, sprite clouds, stars, a black hole — wherever
+   * the camera is, and the field point it came from is no longer drawn.
+   *
+   * @param {string} id the field's id for the point
+   * @param {number} level which field level it came from
+   * @param {{x:number,y:number,z:number}} worldMpc
+   * @param {{absMag:number, colour:number[]}} record
+   */
+  pinFieldGalaxy(id, level, worldMpc, record) {
+    const key = `fgx:${id}`;
+    const existing = this.pinned.get(key);
+    if (existing) return existing;
+    const seed = hashName(key);
+    const random = mulberry(seed);
+    // A point of the cluster levels is the light of a whole group; what you
+    // arrive at is the giant elliptical at its heart.
+    const lum = Math.min(10 ** ((-20.6 - record.absMag) / 2.5), 12);
+    const [r, , b] = record.colour;
+    const roll = random();
+    let morph;
+    if (level > 0 || r - b > 0.3) morph = roll < 0.75 ? 'E' : 'S0';
+    else if (r - b > 0.05) morph = roll < 0.55 ? 'Sb' : 'SBb';
+    else morph = roll < 0.45 ? 'Sc' : roll < 0.85 ? 'SBc' : 'Irr';
+    const radiusPc = 15000 * lum ** 0.42 * (0.85 + random() * 0.3);
+    const n = new Vector3(gaussian(random), gaussian(random), gaussian(random)).normalize();
+    const u = new Vector3(gaussian(random), gaussian(random), gaussian(random));
+    u.addScaledVector(n, -u.dot(n)).normalize();
+    const w = new Vector3().crossVectors(n, u).normalize();
+    const code = morphCode(morph);
+    const frame = {
+      id: key,
+      key,
+      name: `${properName(mulberry(seed ^ 0x3c1))} Galaxy`,
+      kind: 'generated',
+      pinned: true,
+      morphLabel: morph,
+      center: new Vector3(worldMpc.x * MPC_KM, worldMpc.y * MPC_KM, worldMpc.z * MPC_KM),
+      u,
+      w,
+      n,
+      radiusKm: radiusPc * PC_KM,
+      luminosity: lum,
+      morph: code,
+      colour: morphColour(morph),
+      seed,
+      holeMassSol: (code < 1.5 ? 2e8 : 1.2e7) * lum ** 1.3,
+    };
+    this.pinned.set(key, frame);
+    // A galaxy point is that galaxy, and goes; a cluster's glow stays, since
+    // the rest of the cluster is still there.
+    if (level === 0) this.field.hidePoint(id);
+    this.field.setPinned([...this.pinned.values()].map((g) => ({
+      x: g.center.x / MPC_KM,
+      y: g.center.y / MPC_KM,
+      z: g.center.z / MPC_KM,
+      absMag: -20.6 - 2.5 * Math.log10(g.luminosity),
+      radiusMpc: (g.radiusKm * 0.82) / MPC_KM,
+      colour: g.colour,
+    })));
+    this._galaxyDirty = true;
+    return frame;
+  }
+
   _repackGalaxies() {
     // The Milky Way had no billboard of its own, only its sprites and the
     // particle cloud, so between those giving out and its point taking over
     // home was simply missing from the sky.
-    const list = [this.milkyWay];
+    const list = [this.milkyWay, ...this.pinned.values()];
     for (const cell of this.galaxyCells.values()) {
       for (const g of cell.galaxies) {
         if (list.length >= this.galaxyCap) break;
