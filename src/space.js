@@ -829,11 +829,11 @@ function resolveWorld(key) {
     }
     const planet = exoSystem.planets.find((item) => item.spec.key === key);
     if (planet?.world) {
-      return { key, name: planet.spec.name, position: planet.world, radius: planet.spec.radiusKm, kind: 'body', spec: planet.spec };
+      return { key, name: planet.spec.name, position: planet.world, radius: planet.spec.radiusKm, kind: 'body', spec: planet.spec, generated: Boolean(exoSystem.system.generated) };
     }
     const moon = exoSystem.moons.find((item) => item.spec.key === key);
     if (moon?.world) {
-      return { key, name: moon.spec.name, position: moon.world, radius: moon.spec.radiusKm, kind: 'body', spec: moon.spec };
+      return { key, name: moon.spec.name, position: moon.world, radius: moon.spec.radiusKm, kind: 'body', spec: moon.spec, generated: true };
     }
   }
   const dest = destByKey.get(key);
@@ -860,11 +860,11 @@ function resolveWorld(key) {
   if (dest.kind === 'exo-planet') {
     const item = exoSystem?.planets.find((p) => p.spec.name === dest.planetName);
     if (item?.world) {
-      return { key, name: dest.name, position: item.world, radius: item.spec.radiusKm, kind: 'body', spec: item.spec };
+      return { key, name: dest.name, position: item.world, radius: item.spec.radiusKm, kind: 'body', spec: item.spec, generated: Boolean(dest.system?.generated) };
     }
     const moon = exoSystem?.moons.find((m) => m.spec.name === dest.planetName);
     if (moon?.world) {
-      return { key, name: dest.name, position: moon.world, radius: moon.spec.radiusKm, kind: 'body', spec: moon.spec };
+      return { key, name: dest.name, position: moon.world, radius: moon.spec.radiusKm, kind: 'body', spec: moon.spec, generated: true };
     }
     const pos = starWorld({ system: dest.system });
     return { key, name: dest.name, position: pos, radius: 6371, kind: 'star', dest };
@@ -1615,7 +1615,7 @@ ui = createExplorerUI({
       const dest = destByKey.get(key);
       if (dest?.cosmic) {
         const g = dest.cosmic;
-        return { morph: `${galaxyType(g.morph)}, uncharted`, d: g.center.distanceTo(universe.get('sun').position) / (PC_KM * 1e6), radiusKm: g.radiusKm };
+        return { generated: true, morph: `${galaxyType(g.morph)}, uncharted`, d: g.center.distanceTo(universe.get('sun').position) / (PC_KM * 1e6), radiusKm: g.radiusKm };
       }
       if (dest?.galaxyIndex === undefined) return null;
       return { ...data.galaxies.galaxies[dest.galaxyIndex], radiusKm: deepField.galaxyAt(dest.galaxyIndex)?.radiusKm };

@@ -84,6 +84,8 @@ export function classifyBody(spec, key) {
   return 'Regular moon';
 }
 
+const GENERATED = 'Generated \u2014 not observed; invented by rules from real populations';
+
 function badge(kind) {
   return el('span', { class: `badge k-${kind}`, text: kind.replace('-', ' ') });
 }
@@ -150,6 +152,7 @@ export function describe(resolved, context = {}) {
     }
     add('Magnitude', g?.mag != null ? num(g.mag, 1) : null);
     if (g?.radiusKm) add('Radius', `${num(g.radiusKm / LY_KM, 0)} ly`);
+    add('Data', g?.generated ? GENERATED : g ? 'Catalogued \u2014 position and type measured' : null, true);
     return { title: resolved.name, className: g?.morph ? `Galaxy, type ${g.morph}` : 'Galaxy', kind: 'galaxy', rows };
   }
 
@@ -213,6 +216,7 @@ export function describe(resolved, context = {}) {
     // radii you can actually see the effect of in the render.
     add('Photon sphere', formatDistance(rs * 1.5));
     add('Spin', `a\u002f\u004d = ${num(s.spin, 2)}`);
+    if (s.generated) add('Data', GENERATED, true);
     return {
       title: resolved.name,
       className: s.massSol > 1e5 ? 'Supermassive black hole' : 'Black hole',
@@ -247,9 +251,14 @@ export function describe(resolved, context = {}) {
     );
     add('Effective temperature', system?.teff ?? profile?.teff ? `${num(system?.teff ?? profile.teff)} K` : null);
     add('Luminosity', profile?.luminositySol ? `${num(profile.luminositySol, profile.luminositySol < 10 ? 2 : 0)} L\u2609` : null);
-    add('Known planets', system?.planets?.length ? String(system.planets.length) : null);
+    add(system?.generated ? 'Planets' : 'Known planets', system?.planets?.length ? String(system.planets.length) : null);
     if (system?.planets?.length) {
       add('System', system.planets.map((p) => p.name).join(', '), true);
+    }
+    if (dest.generated) add('Data', GENERATED, true);
+    else {
+      const planets = system?.planets?.length ? (system.generated ? '; its planets are generated' : '; its planets are known') : '';
+      add('Data', `Catalogued \u2014 position and brightness measured${planets}`, true);
     }
     return { title: resolved.name, className: dest.spect ? `Star \u00b7 ${dest.spect}` : 'Star', kind: 'star', rows };
   }
@@ -320,6 +329,8 @@ export function describe(resolved, context = {}) {
 
   if (spec.dem) add('Elevation model', 'Measured (LOLA)', true);
   else if (spec.craterOctaves) add('Surface', 'Procedural relief', true);
+  if (resolved.generated) add('Data', GENERATED, true);
+  else if (key?.startsWith('exo:')) add('Data', 'Orbit and size measured \u2014 the surface is imagined from them', true);
 
   const moons = MOONS.filter((m) => m.parent === key).sort((a, b) => b.radiusKm - a.radiusKm);
   const carried = [...BODY_BY_KEY.values()].filter((b) => b.parent === key && b.key !== key);
