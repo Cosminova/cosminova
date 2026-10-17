@@ -94,6 +94,7 @@ export class OrbitApproachControls {
     this.orbitSensitivity = 0.0045;
     this.lookSensitivity = 0.0032;
     this.minDistanceRadii = 1.000001;
+    this.groundFloor = false;
     this.maxDistanceRadii = 1e22;
     /**
      * For a target sitting on a surface: the ground's up direction there and
@@ -177,8 +178,10 @@ export class OrbitApproachControls {
     this.walkAxisScale = new Vector3(1, 1, 1);
     this.walkGroundKm = 0;
     this.walkEyeKm = 0.0017;
-    /** km/s at a walk; Shift runs at six times this. */
-    this.walkSpeed = 0.0014;
+    /** km/s at the first step; Shift is five times this, and holding a key builds up to five times more. */
+    this.walkSpeed = 0.012;
+    /** km/s over the ground this frame, for whoever has to keep the ground ahead of it. */
+    this.walkVelocity = 0;
     this._walkFrameInverse = new Quaternion();
     this._walkMove = new Vector3();
     this._walkRight = new Vector3();
@@ -451,8 +454,7 @@ export class OrbitApproachControls {
       (event) => {
         event.preventDefault();
         if (this.mode === 'walk') {
-          // On foot the wheel is the pace, from a stroll to a vehicle.
-          this.walkSpeed = clamp(this.walkSpeed * Math.exp(-event.deltaY * 0.0025), 0.0004, 2);
+          this.zoomBy(event.ctrlKey ? event.deltaY * 0.014 : event.deltaY * 0.0028);
           return;
         }
         this._flight = null;
@@ -496,6 +498,11 @@ export class OrbitApproachControls {
       const tag = event.target?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || event.target?.isContentEditable) return;
       this._keys.add(event.code);
+      if (event.code === 'BracketLeft' || event.code === 'BracketRight') {
+        const factor = event.code === 'BracketRight' ? 1.6 : 1 / 1.6;
+        if (this.mode === 'walk') this.walkSpeed = clamp(this.walkSpeed * factor, 0.001, 5);
+        else this.flySpeed = clamp(this.flySpeed * factor, 0.01, 600);
+      }
       if (event.code === 'KeyF' && !this.pilot) {
         this.earthView = false;
         this.mode = this.mode === 'fly' ? 'orbit' : 'fly';
@@ -887,8 +894,16 @@ export class OrbitApproachControls {
    */
   zoomBy(amount) {
     if (this.mode === 'walk') {
+      // On foot, zooming is rising off the ground and settling back to it, and
+      // rising far enough is taking off: the camera goes back to orbiting
+      // from where it is, up in the sky over the place it was standing.
       this.zoomVelocity = 0;
-      this.walkSpeed = clamp(this.walkSpeed * Math.exp(-amount * 0.6), 0.0004, 2);
+      const ceiling = Math.min(20, Math.max(this.targetRadius * 0.004, 0.5));
+      this.walkEyeKm = clamp(this.walkEyeKm * Math.exp(amount * 1.6), 0.0017, ceiling);
+      if (amount > 0 && this.walkEyeKm >= ceiling * (1 - 1e-6)) {
+        this.stopWalk();
+        this.lookPitch = 1.25;
+      }
       return;
     }
     if (this.mode === 'roam' && this.pilot) {
@@ -927,7 +942,21 @@ export class OrbitApproachControls {
     // Capped in kilometres as well as radii. In radii alone a probe a few
     // metres across ran out of zoom a megaparsec from home, before the
     // universe had even begun to show.
+    // Zooming on into ground already at the floor is asking to stand on it.
+    // groundFloor says the floor came from real ground under the camera, and
+    // canWalk says whether this target is a body that can be stood on at all.
     const ceiling = Math.max(this.minDistanceRadii, MAX_DISTANCE_KM / Math.max(this.targetRadius, 1e-9));
+    if (this.groundFloor && this.mode === 'orbit') {
+      // Over ground the wheel scales height above it, not distance from the
+      // centre, so a notch a few kilometres up is not the whole way down.
+      const above = Math.max(this.distanceRadii - this.minDistanceRadii, 0.001 / Math.max(this.targetRadius, 1e-9));
+      if (amount < 0 && above * this.targetRadius < 0.02 && this.canWalk?.()) {
+        this.startWalk();
+        return;
+      }
+      this.distanceRadii = clamp(this.minDistanceRadii + above * Math.exp(amount * 1.4), this.minDistanceRadii, ceiling);
+      return;
+    }
     this.distanceRadii = clamp(this.distanceRadii * Math.exp(amount), this.minDistanceRadii, ceiling);
   }
 
@@ -1108,7 +1137,12 @@ export class OrbitApproachControls {
       (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) +
       (keys.has('KeyA') || keys.has('ArrowLeft') ? -1 : 0);
     const rise = (keys.has('KeyE') ? 1 : 0) + (keys.has('KeyQ') ? -1 : 0);
-    const run = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 6 : 1;
+    const run = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 5 : 1;
+    // Holding a direction builds up over a couple of seconds to several times
+    // the starting pace, so a short tap still places you precisely and a long
+    // press covers ground.
+    this._walkBoost = thrust || strafe ? Math.min((this._walkBoost ?? 0) + dt * 0.5, 1) : 0;
+    this.walkVelocity = 0;
 
     const upL = this.walkLocal;
     const headingL = this.walkHeadingLocal;
@@ -1120,7 +1154,9 @@ export class OrbitApproachControls {
     if (thrust || strafe) {
       const radiusKm = Math.max(this.targetRadius + this.walkGroundKm, 1e-6);
       // Faster with height, so a hover over the plains is not a crawl.
-      const speed = this.walkSpeed * run * Math.max(1, this.walkEyeKm / 0.0017) ** 0.5;
+      const boost = 1 + 4 * this._walkBoost * this._walkBoost;
+      const speed = this.walkSpeed * run * boost * Math.max(1, this.walkEyeKm / 0.0017) ** 0.6;
+      this.walkVelocity = speed;
       const step = (speed * dt) / radiusKm;
       const move = this._walkMove.copy(headingL).multiplyScalar(thrust).addScaledVector(rightL, strafe);
       if (move.lengthSq() > 1) move.normalize();
@@ -1176,35 +1212,58 @@ export class OrbitApproachControls {
       (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) +
       (keys.has('KeyA') || keys.has('ArrowLeft') ? -1 : 0);
     const rise = (keys.has('KeyE') ? 1 : 0) + (keys.has('KeyQ') ? -1 : 0);
-    if (!thrust && !strafe && !rise) return;
-
-    if (this.earthView) {
-      this.earthView = false;
+    const pressed = Boolean(thrust || strafe || rise);
+    const velocity = (this._flyVelocity ??= new Vector3());
+    // Coasting only means something while flying freely; an orbit, a walk or
+    // a flight to a target takes the camera over, and it stops dead.
+    if (this._flight || (this.mode !== 'fly' && this.mode !== 'roam')) velocity.set(0, 0, 0);
+    if (!pressed && velocity.lengthSq() === 0) {
+      this._flyHold = 0;
+      return;
     }
-    // Thrusting means you have left the craft, the same way it means you have
-    // left the ground. The app notices by watching the flag.
-    if (this.riding) this.setRiding(false);
 
-    // Thrusting is what turns an orbit into a flight, but it must not drag a
-    // roaming camera back onto a tether it was deliberately let off.
-    if (this.mode !== 'roam') this.mode = 'fly';
-    this._flight = null;
-    const boost = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 4 : 1;
-    const speed =
+    if (pressed) {
+      if (this.earthView) {
+        this.earthView = false;
+      }
+      // Thrusting means you have left the craft, the same way it means you have
+      // left the ground. The app notices by watching the flag.
+      if (this.riding) this.setRiding(false);
+
+      // Thrusting is what turns an orbit into a flight, but it must not drag a
+      // roaming camera back onto a tether it was deliberately let off.
+      if (this.mode !== 'roam') this.mode = 'fly';
+      this._flight = null;
+    }
+    // Held, the thrust builds: a tap nudges, a few seconds' hold is ten times
+    // the set pace, so one key crosses a room or a solar system alike.
+    this._flyHold = pressed ? Math.min((this._flyHold ?? 0) + dt / 4, 1) : 0;
+    const boost = (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 4 : 1) * (1 + 9 * this._flyHold * this._flyHold);
+    const scale =
       this.mode === 'roam'
-        ? Math.max(this.roamReferenceKm, 0.02) * this.flySpeed * boost
-        : Math.max(this.altitudeKm, this.targetRadius * 0.002) * this.flySpeed * boost;
+        ? Math.max(this.roamReferenceKm, 0.02) * this.flySpeed
+        : Math.max(this.altitudeKm, this.targetRadius * 0.002) * this.flySpeed;
+    const wanted = this._flyWanted ??= new Vector3();
+    wanted.set(0, 0, 0)
+      .addScaledVector(this._forward, thrust)
+      .addScaledVector(this._right, strafe)
+      .addScaledVector(this._up, rise);
+    if (wanted.lengthSq() > 1) wanted.normalize();
+    wanted.multiplyScalar(scale * boost);
+    // Speeding up takes a moment and so does gliding to a stop; turning while
+    // moving swings the motion round rather than snapping it.
+    velocity.lerp(wanted, 1 - Math.exp(-dt * (pressed ? 3.5 : 4)));
+    if (!pressed && velocity.length() < scale * 0.01) {
+      velocity.set(0, 0, 0);
+      return;
+    }
     if (this.mode === 'roam') {
       // Onto the offset from the anchor, not onto the absolute position, so a
       // small step stays a small step however far from the origin we are.
-      this.roamOffset.addScaledVector(this._forward, thrust * speed * dt);
-      this.roamOffset.addScaledVector(this._right, strafe * speed * dt);
-      this.roamOffset.addScaledVector(this._up, rise * speed * dt);
+      this.roamOffset.addScaledVector(velocity, dt);
       this.worldPosition.copy(this.roamOriginPosition).add(this.roamOffset);
     } else {
-      this.worldPosition.addScaledVector(this._forward, thrust * speed * dt);
-      this.worldPosition.addScaledVector(this._right, strafe * speed * dt);
-      this.worldPosition.addScaledVector(this._up, rise * speed * dt);
+      this.worldPosition.addScaledVector(velocity, dt);
     }
 
     const dx = this.worldPosition.x - this.targetPosition.x;

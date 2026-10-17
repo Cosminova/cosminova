@@ -1,5 +1,6 @@
 import { DataTexture, LinearFilter, Quaternion, RGBAFormat, SRGBColorSpace, Vector3 } from 'three';
-import { describePlanet, hashName } from './classify.js';
+import { describePlanet, hashName, rng as seeded } from './classify.js';
+import { inventGeology } from './geology.js';
 import { createRings } from './rings.js';
 import { starLook, starTint, surfaceBrightness } from './stellar.js';
 import { proceduralCraft } from './craft-missions.js';
@@ -45,10 +46,32 @@ function paletteArrays(described) {
  */
 const MACRO_RELIEF = 0.004;
 
+/** What the inspector shows of an invented or catalogue world beyond its orbit. */
+function detailsOf(described) {
+  return {
+    temperatureK: described.temperatureK,
+    life: described.life,
+    air: described.air,
+    oceanKind: described.oceanKind,
+    volatiles: described.volatiles,
+    bulk: described.bulk,
+  };
+}
+
+/**
+ * How thick the drawn air is, from the surface pressure: a Martian wisp, an
+ * Earth, or a Venusian ocean of gas that hides the ground.
+ */
+function airDensity(pressureBar) {
+  if (!pressureBar) return 1.5;
+  return clamp(1.3 + Math.log10(pressureBar) * 0.75, 0.35, 3.2);
+}
+
 function specFromPlanet(entry, described, hostKey) {
   const gaseous = described.gaseous;
   const palette = paletteArrays(described);
   const airless = described.volatiles === 'airless';
+  const random = seeded(hashName(`${entry.name}:geo`));
   // A starting guess only. The waterline that actually floods the fraction the
   // volatile class asked for depends on the shape of this world's own height
   // distribution, which is measured off the GPU on first sight: see
@@ -111,7 +134,13 @@ function specFromPlanet(entry, described, hostKey) {
         // Thicker and bluer than it was. From low altitude the band of air over
         // the horizon is most of what makes a world look like somewhere you
         // could stand, and a thin one leaves the ground meeting black sky.
-        : { height: 0.028, density: 1.5, tint: described.hazeTint },
+        : {
+            height: 0.028 * clamp(0.7 + Math.log10((described.air?.pressureBar ?? 1) + 0.1) * 0.25, 0.5, 1.4),
+            density: airDensity(described.air?.pressureBar),
+            tint: described.hazeTint,
+          },
+    geology: gaseous ? null : inventGeology({ radiusKm: described.radiusKm, bulk: described.bulk === 'aquaria' ? 'ice' : 'rock' }, random),
+    details: detailsOf(described),
     classLabel: described.label,
     aAu: entry.aAu,
     periodDays: entry.periodDays,
@@ -149,6 +178,8 @@ function specFromMoon(entry, described, parentKey) {
     iceLatitude: described.icecapLatitude,
     palette,
     paletteFreq: described.provinceScale,
+    geology: inventGeology({ radiusKm, bulk: described.temperatureK < 170 ? 'ice' : 'rock' }, seeded(hashName(`${entry.name}:geo`))),
+    details: detailsOf(described),
     maxPatches: 1600,
     maxLevel: 18,
     patchResolution: 20,
@@ -195,6 +226,8 @@ export class ExoSystem {
       look: starLook(teff, system.radiusSol || 1, hashName(system.host ?? '')),
     });
     this.star.group.name = this.key;
+    this.companion = companionFor(system, teff);
+    if (this.companion?.close) this.luminositySol += this.companion.luminositySol;
 
     this.planets = [];
     this.moons = [];
@@ -207,10 +240,20 @@ export class ExoSystem {
       }
       spec.orbitKm = spec.aAu * AU_KM;
       spec.orbitDays = entry.periodDays || 365 * Math.pow(spec.aAu, 1.5);
+      // Round a close pair, a planet can only survive well outside the pair
+      // itself, the way Kepler-16b circles both its suns.
+      if (this.companion?.close && spec.orbitKm < this.companion.separationKm * 3.5) {
+        spec.orbitKm = this.companion.separationKm * (3.5 + hashAngle(`${entry.name}:cb`) * 0.3);
+        spec.aAu = spec.orbitKm / AU_KM;
+        spec.orbitDays = 365.25 * Math.sqrt(spec.aAu ** 3 / Math.max((system.massSol || 1) + this.companion.massSol, 0.1));
+      }
       const planet = new Planet(spec);
       const item = { spec, planet, angle0: hashAngle(entry.name), moons: [] };
       // Giants out past where ice survives; a hot Jupiter's would have boiled off.
-      if (spec.banding && spec.aAu > 0.6 && hashAngle(`${entry.name}:rings`) < Math.PI * 0.9) {
+      // A rocky world keeps one now and then too, from a moon torn apart.
+      const ringRoll = hashAngle(`${entry.name}:rings`);
+      if ((spec.banding && spec.aAu > 0.6 && ringRoll < Math.PI * 1.1)
+        || (!spec.banding && spec.aAu > 0.3 && ringRoll < Math.PI * 0.16)) {
         item.rings = ringSystemFor(spec, hashName(`${entry.name}:rings`));
         planet.spin.add(item.rings.mesh);
         planet.setRings(item.rings.texture, item.rings.innerKm, item.rings.outerKm);
@@ -248,6 +291,12 @@ export class ExoSystem {
     const days = date.getTime() / 86400000;
     const host = this.position;
     this.star.group.position.set(host.x - cameraWorld.x, host.y - cameraWorld.y, host.z - cameraWorld.z);
+    if (this.companion) {
+      const c = this.companion;
+      const angle = c.phase + (days / c.periodDays) * Math.PI * 2;
+      c.local.set(c.separationKm * Math.cos(angle), c.separationKm * Math.sin(angle) * Math.sin(c.incl), c.separationKm * Math.sin(angle) * Math.cos(c.incl));
+      c.world.copy(host).add(c.local);
+    }
     for (const item of this.planets) {
       const angle = item.angle0 + (days / item.spec.orbitDays) * Math.PI * 2;
       const r = item.spec.orbitKm;
@@ -330,6 +379,7 @@ export class ExoSystem {
 
   dispose() {
     this.star.group.removeFromParent();
+    this.companion?.star.group.removeFromParent();
     for (const item of this.planets) {
       item.planet.group.removeFromParent();
       for (const moon of item.moons) moon.planet.group.removeFromParent();
@@ -343,13 +393,70 @@ export class ExoSystem {
 }
 
 /**
+ * A second star, for a third of the invented systems: about the fraction of
+ * Sun-like stars that have one. Either a close pair the planets orbit both of,
+ * or a wide companion far beyond the planets that is a second sun in their
+ * sky; now and then a white dwarf, the burnt-out core of what was once the
+ * brighter of the two. Catalogue systems keep the stars they are known to have.
+ */
+function companionFor(system, teff) {
+  if (!system.generated) return null;
+  const random = seeded(hashName(`${system.host}:companion`));
+  if (random() > 0.34) return null;
+  const close = random() < 0.4;
+  const whiteDwarf = random() < 0.12;
+  const radiusA = system.radiusSol || 1;
+  const teffB = whiteDwarf ? 9000 + random() * 16000 : clamp(teff * (0.5 + random() * 0.6), 2700, 32000);
+  const radiusSol = whiteDwarf ? 0.012 : clamp(Math.min(radiusA, 2) * (0.35 + random() * 0.75), 0.12, 6);
+  const massSol = whiteDwarf ? 0.6 : radiusSol ** 1.25;
+  const widest = Math.max(0, ...system.planets.map((p) => p.aAu ?? 0));
+  const separationAu = close
+    ? Math.max(0.04 + random() * 0.18, (radiusA + radiusSol) * 0.00465047 * 4)
+    : Math.max(25 + random() * 250, widest * 4);
+  const separationKm = separationAu * AU_KM;
+  const colour = starTint(teffB);
+  const star = new Star({
+    radiusKm: radiusSol * SOLAR_RADIUS_KM,
+    colour,
+    intensity: 0.95 * surfaceBrightness(teffB),
+    look: starLook(teffB, radiusSol, hashName(`${system.host}:B`)),
+  });
+  star.group.name = `star:${system.host}:B`;
+  const luminositySol = radiusSol ** 2 * (teffB / 5772) ** 4;
+  const info = {
+    close,
+    whiteDwarf,
+    teff: teffB,
+    radiusSol,
+    massSol,
+    separationAu,
+    periodDays: 365.25 * Math.sqrt(separationAu ** 3 / Math.max((system.massSol || 1) + massSol, 0.1)),
+  };
+  // For the inspector, which only sees the system's data.
+  system.companionInfo = info;
+  return {
+    ...info,
+    star,
+    separationKm,
+    luminositySol,
+    phase: random() * Math.PI * 2,
+    incl: (random() - 0.5) * (close ? 0.1 : 0.8),
+    local: new Vector3(),
+    world: new Vector3(),
+  };
+}
+
+/**
  * An invented ring system: a radial profile of bands and gaps, icy, dusty or
  * dark, from as narrow as Uranus's to wider than Saturn's.
  */
 function ringSystemFor(spec, seed) {
   let s = seed >>> 0 || 1;
   const random = () => ((s = Math.imul(s ^ (s >>> 15), 0x2c1b3c6d) + 0x9e3779b9 >>> 0) / 4294967296);
-  const tint = [[232, 226, 214], [214, 186, 146], [150, 136, 122], [200, 205, 214]][Math.floor(random() * 4)];
+  const tint = [
+    [232, 226, 214], [214, 186, 146], [150, 136, 122], [200, 205, 214],
+    [180, 200, 226], [206, 160, 128], [120, 110, 104], [226, 214, 190],
+  ][Math.floor(random() * 8)];
   const width = 512;
   const data = new Uint8Array(width * 4);
   const f1 = 18 + random() * 40;

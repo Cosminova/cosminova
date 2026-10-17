@@ -2142,15 +2142,7 @@ export class Planet {
    */
   groundHeightsKm(renderer, dirs, out = new Float32Array(dirs.length)) {
     const probe = groundProbe();
-    this._probeMaterial ??= new ShaderMaterial({
-      // The same uniform objects, not copies: the probe has to answer for the
-      // surface as it is being drawn this frame, not as it was when it was set up.
-      uniforms: this.material.uniforms,
-      vertexShader: PROBE_VERTEX,
-      fragmentShader: PROBE_FRAGMENT,
-      depthTest: false,
-      depthWrite: false,
-    });
+    this._ensureProbeMaterial();
 
     const previous = renderer.getRenderTarget();
     for (let base = 0; base < dirs.length; base += PROBE_SLOTS) {
@@ -2171,6 +2163,63 @@ export class Planet {
     }
     renderer.setRenderTarget(previous);
     return out;
+  }
+
+  _ensureProbeMaterial() {
+    this._probeMaterial ??= new ShaderMaterial({
+      // The same uniform objects, not copies: the probe has to answer for the
+      // surface as it is being drawn this frame, not as it was when it was set up.
+      uniforms: this.material.uniforms,
+      vertexShader: PROBE_VERTEX,
+      fragmentShader: PROBE_FRAGMENT,
+      depthTest: false,
+      depthWrite: false,
+    });
+    return this._probeMaterial;
+  }
+
+  /**
+   * groundHeightsKm without the stall: the read is queued behind the draw and
+   * resolves a frame or two later, which is what a walker probing the ground
+   * every few steps can afford and a synchronous read every frame cannot.
+   *
+   * @returns {Promise<Float32Array> | null} null while a read is still pending
+   */
+  groundHeightsKmAsync(renderer, dirs) {
+    if (this._asyncProbe || !renderer.readRenderTargetPixelsAsync) return null;
+    const probe = this._probeTargetAsync ??= {
+      target: groundProbe().target.clone(),
+      pixels: new Float32Array(PROBE_SLOTS * 4),
+    };
+    const shared = groundProbe();
+    this._ensureProbeMaterial();
+    const count = Math.min(PROBE_SLOTS, dirs.length);
+    for (let i = 0; i < count; i++) {
+      shared.dirs[i * 3] = dirs[i].x;
+      shared.dirs[i * 3 + 1] = dirs[i].y;
+      shared.dirs[i * 3 + 2] = dirs[i].z;
+    }
+    shared.geometry.getAttribute('position').needsUpdate = true;
+    shared.geometry.setDrawRange(0, count);
+    shared.points.material = this._probeMaterial;
+    const previous = renderer.getRenderTarget();
+    renderer.setRenderTarget(probe.target);
+    renderer.render(shared.scene, shared.camera);
+    renderer.setRenderTarget(previous);
+    this._asyncProbe = renderer
+      .readRenderTargetPixelsAsync(probe.target, 0, 0, count, 1, probe.pixels)
+      .then(() => {
+        const out = new Float32Array(count);
+        for (let i = 0; i < count; i++) out[i] = probe.pixels[i * 4];
+        return out;
+      })
+      .finally(() => { this._asyncProbe = null; });
+    return this._asyncProbe;
+  }
+
+  /** Spacing of the finest vertices drawn, in radians of the sphere. */
+  finestSpacingRadians() {
+    return Math.PI / 2 / (2 ** this.sphere.deepestLevel * this.sphere.resolution);
   }
 
   /**
@@ -2271,7 +2320,11 @@ export class Planet {
     const fill = spec.skyFill ?? (u.uRockDensity.value <= 0 ? 0 : spec.atmosphere ? 0.12 : 0.045);
     u.uSkyFill.value = fill * clamp(1 - distance / 80, 0, 1);
     const quad = (this.spec.pixelsPerQuad ?? 7) / Math.max(patchScale, 0.05);
-    this.sphere.pixelsPerQuad = altitudeRadii < 0.05 ? Math.max(3.5, quad * 0.55) : quad;
+    // Standing on the ground, the stones and soil are drawn per pixel and the
+    // mesh only has to carry the land; packing quads as tight as on a low pass
+    // spends the budget on a million vertices of terrain nobody can see move.
+    this.sphere.pixelsPerQuad = altitudeRadii < 0.0005 ? Math.max(5, quad * 0.75)
+      : altitudeRadii < 0.05 ? Math.max(3.5, quad * 0.55) : quad;
     this.sphere.maxPatches = Math.max(
       256,
       Math.round((this.spec.maxPatches ?? DEFAULT_MAX_PATCHES) * patchScale),

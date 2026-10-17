@@ -214,14 +214,25 @@ export const GALAXY_FRAGMENT = /* glsl */ `
     // the stars that light the arm a little further out.
     float arms = 0.0;
     float lanes = 0.0;
-    float pitch = mix(2.6, 4.6, smoothstep(2.0, 3.5, vMorph));
+    // Per galaxy: two to four arms (barred ones keep two), wound tight or
+    // loose, grand design or flocculent, and now and then a ring.
+    float s1 = fract(vSeed * 7.31 + 0.13);
+    float s2 = fract(vSeed * 13.7 + 0.41);
+    float s3 = fract(vSeed * 29.3 + 0.77);
+    float armCount = barred > 0.5 ? 2.0 : 2.0 + floor(s1 * 2.999);
+    float pitch = mix(2.6, 4.6, smoothstep(2.0, 3.5, vMorph)) * mix(0.7, 1.35, s2);
     float lr = log(max(r, 0.02));
-    for (int k = 0; k < 2; k++) {
-      float a = ang + float(k) * 3.14159265 + lr * pitch + vSeed * 6.2831853;
+    float flocculent = smoothstep(0.55, 1.0, s3);
+    {
+      // sin² of half the arm count times the angle has that many ridges round.
+      float a = (ang + lr * pitch + vSeed * 6.2831853) * armCount * 0.5;
       float ridge = exp(-pow(sin(a), 2.0) * mix(14.0, 9.0, smoothstep(2.0, 3.5, vMorph)));
-      arms += ridge * exp(-r * 1.55) * smoothstep(0.04, 0.16, r);
-      lanes += exp(-pow(sin(a - 0.3), 2.0) * 38.0) * exp(-r * 1.2) * smoothstep(0.06, 0.2, r);
+      ridge *= mix(1.0, 0.4 + 1.2 * noise(p * 18.0 + vSeed * 17.0), flocculent);
+      arms = 2.0 * ridge * exp(-r * 1.55) * smoothstep(0.04, 0.16, r);
+      lanes = 2.0 * exp(-pow(sin(a - 0.3), 2.0) * 38.0) * exp(-r * 1.2) * smoothstep(0.06, 0.2, r) * (1.0 - flocculent * 0.6);
     }
+    float ringR = 0.35 + s2 * 0.35;
+    arms += (s1 > 0.84 ? 1.0 : 0.0) * exp(-pow((r - ringR) / 0.05, 2.0)) * 0.9;
     arms *= spiral * (1.0 - edgeOn * 0.85);
     lanes *= spiral * (1.0 - edgeOn);
     disc *= mix(1.0, 0.38 + 0.9 * arms, spiral * (1.0 - edgeOn));
@@ -235,8 +246,9 @@ export const GALAXY_FRAGMENT = /* glsl */ `
     // Star-forming knots strung along the arms, pink with hydrogen.
     float knots = pow(noise(p * 34.0 + vSeed * 13.0), 7.0) * (arms * 1.6 + irregular * disc);
 
-    vec3 bulgeCol = vec3(1.00, 0.76, 0.48);
-    vec3 discCol = mix(vec3(0.55, 0.52, 0.45), vec3(0.38, 0.55, 0.82), spiral);
+    vec3 tint = vec3(1.0 + (s3 - 0.5) * 0.2, 1.0, 1.0 + (s1 - 0.5) * 0.26);
+    vec3 bulgeCol = vec3(1.00, 0.76, 0.48) * tint;
+    vec3 discCol = mix(vec3(0.55, 0.52, 0.45), vec3(0.38, 0.55, 0.82), spiral) * tint;
     vec3 armCol = vec3(0.40, 0.68, 0.95);
     vec3 hii = vec3(0.85, 0.28, 0.36);
 

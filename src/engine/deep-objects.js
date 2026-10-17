@@ -381,7 +381,10 @@ class Nebula {
     // one is faint: Orion from Earth is a smudge. Up close the eye adapts to
     // it, so the drawn brightness follows the apparent size, not the distance.
     const apparent = this.radiusKm / Math.max(distanceKm, this.radiusKm);
-    u.uBright.value = 0.25 + 0.75 * Math.min(1, Math.max(0, (apparent - 0.004) / 0.25));
+    const near = Math.min(1, Math.max(0, (apparent - 0.008) / 0.3));
+    u.uBright.value = 0.05 + 0.95 * near * near * (3 - 2 * near);
+    /** How far inside the cloud the camera is, 0 outside to 1 at its heart. */
+    this.inside = Math.max(0, 1 - distanceKm / this.radiusKm);
     u.uSteps.value = steps;
     // Too small to see: below a couple of pixels there is nothing to march.
     this.group.visible = apparent * pixelsPerRadian > 1.5;
@@ -755,6 +758,46 @@ export function createDeepObjects() {
     neutronStars,
     get(key) {
       return nebulae.get(key) ?? clusters.get(key) ?? neutronStars.get(key) ?? null;
+    },
+    /**
+     * What the sky behind everything looks like from here: the glow of the
+     * cloud or cluster the camera is inside, or null out in the open.
+     */
+    skyLook(cameraWorld) {
+      let best = null;
+      for (const nebula of nebulae.values()) {
+        const inside = nebula.inside ?? 0;
+        if (inside <= 0) continue;
+        const spec = nebula.spec;
+        const dark = spec.type === 'dark';
+        const strength = (dark ? 0.012 : spec.type === 'planetary' ? 0.05 : 0.07) * Math.min(1, inside * 3) ** 0.8;
+        if (best && best.strength >= strength) continue;
+        best = {
+          strength,
+          colours: spec.colours,
+          centre: new Vector3().subVectors(nebula.world, cameraWorld).normalize(),
+          seed: (hashKey(spec.key) % 1000) / 37,
+        };
+      }
+      for (const cluster of clusters.values()) {
+        const spec = cluster.spec;
+        const radiusKm = spec.radiusPc * PC_KM;
+        const d = cameraWorld.distanceTo(cluster.world);
+        if (d > radiusKm) continue;
+        const globular = spec.type === 'globular';
+        const inside = 1 - d / radiusKm;
+        const strength = (globular ? 0.05 : 0.018) * inside ** 1.5;
+        if (best && best.strength >= strength) continue;
+        best = {
+          strength,
+          colours: globular
+            ? [[1.0, 0.78, 0.5], [0.85, 0.6, 0.38], [1.0, 0.92, 0.75]]
+            : [[0.7, 0.8, 1.0], [0.5, 0.6, 0.9], [0.95, 0.95, 1.0]],
+          centre: new Vector3().subVectors(cluster.world, cameraWorld).normalize(),
+          seed: (hashKey(spec.key) % 1000) / 37,
+        };
+      }
+      return best;
     },
     /**
      * @param {object} o

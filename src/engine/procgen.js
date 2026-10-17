@@ -252,16 +252,20 @@ export function inventPlanetsFor(random, host, star) {
   else if (star.teff > 7500) mean = 1.2;
   else if (star.teff > 3900) mean = 3.2;
   else mean = 3.8;
+  // Kepler's counts are a floor, not the truth: it only sees planets whose
+  // orbits happen to line up with us and are short enough to repeat.
+  mean *= 1.6;
   // Poisson by inversion, capped at what a renderer can carry.
   let count = 0;
   let p = Math.exp(-mean);
   let cumulative = p;
   const u = random();
-  while (u > cumulative && count < 9) {
+  while (u > cumulative && count < 10) {
     count++;
     p *= mean / count;
     cumulative += p;
   }
+  if (!count && star.cls === 'dwarf' && random() < 0.6) count = 1 + Math.floor(random() * 3);
   if (!count) return [];
 
   const snowLine = 2.7 * sqrtL * Math.min(star.massSol, 3) ** 0.2;
@@ -270,9 +274,15 @@ export function inventPlanetsFor(random, host, star) {
   let aAu = Math.max(0.04 * sqrtL, starRadiusAu * 4, 0.012) * (1 + random() * 2.5);
   if (star.cls !== 'dwarf') aAu = Math.max(aAu, starRadiusAu * 6, 0.4 * sqrtL);
 
+  // Somewhere temperate, more often than not, around a star that lives long
+  // enough for it to matter. One orbit is nudged into the habitable zone and
+  // given a rocky size rather than added, so the spacing stays a real system's.
+  const temperateSlot = star.cls === 'dwarf' && star.teff > 2600 && star.teff < 7600 && random() < 0.5
+    ? Math.floor(random() * count) : -1;
   const planets = [];
   for (let k = 0; k < count; k++) {
     if (k > 0) aAu *= (1.35 + random() * 1.4) ** (2 / 3) * (aAu < snowLine ? 1 : 1.25);
+    if (k === temperateSlot) aAu = Math.max(aAu, sqrtL * (1.0 + random() * 0.5));
     let radiusEarth;
     const hot = aAu < 0.1;
     if (hot && random() < 0.012 * star.massSol) {
@@ -285,6 +295,7 @@ export function inventPlanetsFor(random, host, star) {
       const roll = random();
       radiusEarth = roll < 0.45 ? 0.45 + random() * 1.15 : roll < 0.85 ? 1.9 + random() * 1.6 : 1.55 + random() * 0.4;
     }
+    if (k === temperateSlot) radiusEarth = 0.6 + random() * 1.0;
     const massEarth = massFromRadius(random, radiusEarth);
     const name = `${host} ${LETTERS[k]}`;
     planets.push({

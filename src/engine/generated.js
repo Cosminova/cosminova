@@ -172,8 +172,10 @@ export function inventBlackHoleSystems(holes) {
      * orbits at stellar distances. Sagittarius A* lands at 80 to 1500
      * astronomical units either way, which is where the real S-stars are.
      */
-    const inner = Math.max(rsAu * 900, 12);
-    const outer = Math.max(rsAu * 18000, 700);
+    // Closer than the S-stars mostly are, so that from their planets the hole
+    // is a disc across a good part of the sky rather than a bright point.
+    const inner = Math.max(rsAu * 260, 6);
+    const outer = Math.max(rsAu * 5000, 220);
     const count = 3 + Math.floor(random() * 3);
     for (let i = 0; i < count; i++) {
       // Steeply inclined and randomly oriented, the way the S-star orbits are:

@@ -53,6 +53,12 @@ export const VIEW_GROUPS = [
     options: [
       { key: 'atmospheres', label: 'Atmospheres', default: true },
       { key: 'rings', label: 'Rings', default: true },
+      {
+        key: 'orbits',
+        label: 'Orbits',
+        default: false,
+        title: 'The paths of the planets and moons. Speed up time to watch them move along them.',
+      },
       { key: 'nightLights', label: 'City lights', default: true },
       {
         key: 'terrainShadows',

@@ -144,12 +144,13 @@ export function volatileClass({ bulk, temperatureK, massEarth, radiusEarth }, ra
   // unknown; ocean worlds are common in formation models, so the draw is not
   // heavily weighted against them.
   const draw = random();
-  if (bulk === 'aquaria') return draw < 0.7 ? 'oceanic' : 'marine';
-  if (temperatureK > 330) return draw < 0.7 ? 'desertic' : 'lacustrine';
-  if (draw < 0.3) return 'desertic';
-  if (draw < 0.5) return 'lacustrine';
-  if (draw < 0.8) return 'marine';
-  return 'oceanic';
+  if (bulk === 'aquaria') return draw < 0.45 ? 'oceanic' : draw < 0.75 ? 'superoceanic' : 'marine';
+  if (temperatureK > 330) return draw < 0.6 ? 'desertic' : draw < 0.85 ? 'lacustrine' : 'marine';
+  if (draw < 0.18) return 'desertic';
+  if (draw < 0.33) return 'lacustrine';
+  if (draw < 0.68) return 'marine';
+  if (draw < 0.92) return 'oceanic';
+  return 'superoceanic';
 }
 
 // --- appearance -----------------------------------------------------------
@@ -302,34 +303,119 @@ function mineralFor({ bulk, temperatureK, volatiles, oceanLevel }, random) {
  * SpaceEngine's surface palettes use. Anything without an ocean simply never
  * samples the first stops.
  */
-function rockPalette({ bulk, temperatureK, volatiles, oceanLevel }, random) {
+function rockPalette({ bulk, temperatureK, volatiles, oceanLevel, life, starTeff }, random) {
   const mineral = mineralFor({ bulk, temperatureK, volatiles, oceanLevel }, random);
+  // Half of all worlds show two crusts, not one: dark lowland lava under pale
+  // highland, rust plains under grey mountains, as the Moon and Mars both do.
+  const second = random() < 0.5 ? mineralFor({ bulk, temperatureK, volatiles, oceanLevel }, random) : mineral;
   // One shift for the whole palette, so the stops stay a set rather than
   // drifting apart into a surface that cannot have formed.
   const weathering = {
-    hue: (random() - 0.5) * 0.1,
-    saturation: 0.7 + random() * 0.65,
-    value: 0.82 + random() * 0.38,
+    hue: (random() - 0.5) * 0.14,
+    saturation: 0.65 + random() * 0.8,
+    value: 0.78 + random() * 0.45,
   };
   const low = shift(mineral.low, weathering);
   const mid = shift(mineral.mid, weathering);
   const high = shift(mineral.high, weathering);
+  const highland = shift(second.mid, weathering);
 
   // Whatever the sea is made of. Below the water line it can only be methane
   // and ethane, which are the colour of weak tea over a dark bed, not blue.
+  // Water ranges from the navy of open ocean to teal over shallow banks and
+  // green where it is thick with algae.
   const hydrocarbon = temperatureK < 200;
-  const sea = hydrocarbon ? [0.05, 0.035, 0.025] : [0.02, 0.05, 0.12];
-  const shelf = hydrocarbon ? [0.12, 0.09, 0.05] : [0.05, 0.14, 0.25];
+  const waterHue = { hue: (random() - 0.5) * 0.1, saturation: 0.75 + random() * 0.5, value: 0.8 + random() * 0.6 };
+  let sea = hydrocarbon ? [0.05, 0.035, 0.025] : shift([0.02, 0.05, 0.12], waterHue);
+  let shelf = hydrocarbon ? [0.12, 0.09, 0.05] : shift([0.05, 0.14, 0.25], waterHue);
+  if (life === 'unicellular' && !hydrocarbon && random() < 0.5) {
+    sea = mixColour(sea, [0.02, 0.07, 0.05], 0.6);
+    shelf = mixColour(shelf, [0.08, 0.2, 0.12], 0.5);
+  }
+
+  let lowland = low;
+  let desert = mixColour(mixColour(low, mid, 0.8), highland, second === mineral ? 0 : 0.6);
+  if (life === 'multicellular' || life === 'exotic') {
+    // Vegetation over the wetter lowlands; the dry interiors stay bare rock.
+    lowland = vegetationFor(starTeff, random, life === 'exotic');
+    desert = mixColour(desert, lowland, 0.15);
+  }
 
   return {
     sea,
     shelf,
     beach: mixColour(mid, high, 0.5),
-    desert: mixColour(low, mid, 0.8),
-    lowland: low,
+    desert,
+    lowland,
     upland: mid,
     rock: mixColour(mid, high, 0.25),
     snow: mixColour(high, [0.93, 0.95, 0.97], temperatureK < 260 ? 0.7 : 0.45),
+  };
+}
+
+/**
+ * Plant colour by the light it grows under. Leaves absorb where their star is
+ * brightest and reflect the rest, so under a hotter star than the Sun they may
+ * come out blue-green, under a K dwarf yellow-olive, and under the deep red
+ * light of an M dwarf dark red or nearly black. Exotic biochemistry can be
+ * anything at all.
+ */
+function vegetationFor(starTeff = 5772, random, exotic) {
+  if (exotic) {
+    return shift([0.32, 0.12, 0.3], { hue: random(), saturation: 0.7 + random() * 0.5, value: 0.6 + random() * 0.6 });
+  }
+  const base = starTeff > 6300 ? [0.07, 0.22, 0.2]
+    : starTeff > 5200 ? [0.1, 0.23, 0.07]
+      : starTeff > 4000 ? [0.24, 0.24, 0.07]
+        : random() < 0.5 ? [0.22, 0.06, 0.07] : [0.1, 0.06, 0.12];
+  return shift(base, { hue: (random() - 0.5) * 0.06, saturation: 0.8 + random() * 0.5, value: 0.8 + random() * 0.4 });
+}
+
+/**
+ * What the air is made of and how much of it there is, in bar. Unmeasured for
+ * every rocky exoplanet, so it follows the three atmospheres the Solar System
+ * offers — nitrogen with whatever life has added, carbon dioxide that never
+ * found an ocean to dissolve into, nitrogen and methane where it is cold enough
+ * for the methane to stay — scaled by what the planet can hold.
+ */
+function atmosphereOf({ gaseous, bulk, volatiles, temperatureK, life, massEarth, radiusEarth }, random) {
+  const pick = (gases) => {
+    const total = gases.reduce((sum, [, v]) => sum + v, 0);
+    return gases.map(([name, v]) => [name, (v / total) * 100]).sort((a, b) => b[1] - a[1]);
+  };
+  if (gaseous) {
+    const ice = bulk === 'neptune';
+    const extra = temperatureK < 150 ? ['NH₃', 0.03] : temperatureK < 400 ? ['H₂O', 0.4] : temperatureK < 1400 ? ['Na/K', 0.01] : ['SiO', 0.05];
+    return {
+      pressureBar: null,
+      gases: pick([['H₂', ice ? 80 : 86], ['He', ice ? 15 : 13], ['CH₄', ice ? 2 + random() * 3 : 0.3], extra]),
+    };
+  }
+  if (volatiles === 'airless') return null;
+  const gravity = massEarth && radiusEarth ? massEarth / (radiusEarth * radiusEarth) : 1;
+  const hold = Math.min(Math.max(gravity, 0.2), 3);
+  if (temperatureK < 200) {
+    return { pressureBar: (0.4 + random() * 2.5) * hold, gases: pick([['N₂', 90 + random() * 8], ['CH₄', 2 + random() * 6], ['Ar', random()]]) };
+  }
+  if (volatiles === 'desertic' && temperatureK > 380) {
+    const thick = random() < 0.6;
+    return {
+      pressureBar: thick ? (8 + random() * 110) * hold : (0.01 + random() * 0.5) * hold,
+      gases: pick([['CO₂', 92 + random() * 6], ['N₂', 2 + random() * 4], ['SO₂', 0.02 + random() * 0.2]]),
+    };
+  }
+  if (volatiles === 'desertic') {
+    return { pressureBar: (0.004 + random() * 0.4) * hold, gases: pick([['CO₂', 90 + random() * 6], ['N₂', 2 + random() * 3], ['Ar', 1 + random() * 2]]) };
+  }
+  if (life === 'multicellular') {
+    return {
+      pressureBar: (0.6 + random() * 1.4) * hold,
+      gases: pick([['N₂', 70 + random() * 12], ['O₂', 15 + random() * 12], ['Ar', 0.5 + random()], ['H₂O', 0.5 + random() * 2], ['CO₂', 0.03 + random() * 0.2]]),
+    };
+  }
+  return {
+    pressureBar: (0.4 + random() * 2.2) * hold,
+    gases: pick([['N₂', 60 + random() * 30], ['CO₂', 1 + random() * 20], ['H₂O', 0.5 + random() * 3], ['Ar', random()], ...(life === 'unicellular' ? [['CH₄', 0.05 + random() * 0.5]] : [])]),
   };
 }
 
@@ -388,8 +474,11 @@ function alongTemperature(table, t) {
 
 function giantPalette(temperatureK, random, bulk = 'jupiter') {
   const raw = alongTemperature(bulk === 'neptune' ? ICE_GIANT : JOVIAN, temperatureK);
+  // Now and then a giant whose chemistry is not the usual: olive, teal,
+  // violet or rose cloud decks, from hazes nobody has yet measured.
+  const exotic = random() < 0.22;
   const base = shift(raw, {
-    hue: (random() - 0.5) * 0.09,
+    hue: exotic ? (random() - 0.5) * 0.8 : (random() - 0.5) * 0.09,
     saturation: 0.75 + random() * 0.55,
     value: 0.9 + random() * 0.2,
   });
@@ -465,10 +554,24 @@ export function describePlanet(entry, { starTeff, aAu } = {}) {
   const gaseous = bulk === 'jupiter' || bulk === 'neptune';
 
   const oceanLevel =
-    volatiles === 'oceanic' ? 0.62 : volatiles === 'marine' ? 0.42 : volatiles === 'lacustrine' ? 0.2 : 0;
+    volatiles === 'superoceanic' ? 0.93 : volatiles === 'oceanic' ? 0.68 : volatiles === 'marine' ? 0.45
+      : volatiles === 'lacustrine' ? 0.2 : 0;
+  // Life as SpaceEngine grades it: none, microbial, complex enough to colour
+  // the land, or of a chemistry unlike ours. Liquid water at a temperate
+  // surface is the only setting the first three are drawn for.
+  const lifeRoll = random();
+  let life = 'none';
+  if (!gaseous && oceanLevel > 0 && temperatureK > 240 && temperatureK < 345) {
+    life = lifeRoll < 0.55 ? 'multicellular' : lifeRoll < 0.85 ? 'unicellular' : 'none';
+  } else if (!gaseous && volatiles !== 'airless' && temperatureK > 120 && temperatureK < 460 && lifeRoll < 0.07) {
+    life = 'exotic';
+  } else if (gaseous && temperatureK > 200 && temperatureK < 420 && lifeRoll < 0.04) {
+    life = 'aerial';
+  }
   const palette = gaseous
     ? giantPalette(temperatureK, random, bulk)
-    : rockPalette({ bulk, temperatureK, volatiles, oceanLevel }, random);
+    : rockPalette({ bulk, temperatureK, volatiles, oceanLevel, life, starTeff }, random);
+  const air = atmosphereOf({ gaseous, bulk, volatiles, temperatureK, life, massEarth: entry.massEarth, radiusEarth }, random);
   // Ice reaches down from the poles once it is cold enough for water to freeze
   // on the surface, and covers the planet outright below the nitrogen line.
   const icecapLatitude =
@@ -487,6 +590,9 @@ export function describePlanet(entry, { starTeff, aAu } = {}) {
     bulk,
     prefix,
     gaseous,
+    life,
+    air,
+    oceanKind: oceanLevel > 0 ? (temperatureK < 200 ? 'methane and ethane' : 'water') : null,
     temperatureK,
     radiusEarth,
     radiusKm: radiusEarth * EARTH_RADIUS_KM,

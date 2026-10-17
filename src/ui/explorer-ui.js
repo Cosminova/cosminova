@@ -72,7 +72,7 @@ const CAMERA_MODES = [
     label: 'Walk',
     title: TOUCH
       ? 'Stand on the selected world and walk on it. Flight pad to walk, drag to look round.'
-      : 'Stand on the selected world and walk on it (L). W/S/A/D walk, Shift runs, E/Q raise and lower your eyes, drag to look, wheel sets the pace.',
+      : 'Stand on the selected world and walk on it (L), or scroll all the way into the ground. W/S/A/D walk and speed up as you hold them, Shift runs, [ and ] set the pace, the wheel raises your eye and scrolling out far enough takes off.',
   },
   {
     value: 'roam',
@@ -687,8 +687,10 @@ export function createExplorerUI(config) {
             ? 'After landing you are standing at eye height. The <b>flight pad</b> walks you over the ground, '
               + 'drag looks around, and pinch sets your pace. Pick another camera mode to take off again.'
             : 'After landing you are standing at eye height in <b>Walk</b> mode. <b>W A S D</b> walk, '
-              + '<b>Shift</b> runs, <b>E</b> and <b>Q</b> raise and lower your eye, drag looks around, '
-              + 'and the wheel sets your pace. Pick another camera mode to take off again.' }),
+              + '<b>Shift</b> runs, and holding a key builds speed. <b>[</b> and <b>]</b> set your pace, '
+              + 'drag looks around, and the wheel raises and lowers your eye. Scroll out far enough and you '
+              + 'take off back into the sky; scroll all the way into the ground from orbit and you land. '
+              + 'In <b>Fly</b> and <b>Roam</b>, <b>[</b> and <b>]</b> set the speed too, and holding <b>W</b> keeps accelerating.' }),
 
           el('div', { class: 'section-title', text: 'The other camera modes' }),
           el('p', { class: 'prose', html:

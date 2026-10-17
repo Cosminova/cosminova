@@ -11,7 +11,7 @@ import {
   Vector3,
   ZeroFactor,
 } from 'three';
-import { armPhase, densityAt, discSurface, gaussian, makeModel, mulberry, spheroid } from './galaxy-model.js';
+import { armPhase, densityAt, discSurface, gaussian, makeModel, mulberry, spheroid, warpAt } from './galaxy-model.js';
 import { platform } from './platform.js';
 import { PC_KM } from './units.js';
 
@@ -232,7 +232,9 @@ function* build(slot, frame) {
   const R = m.radiusPc;
   const bound = m.boundPc;
   const elliptical = m.family === 'elliptical';
-  const zBound = elliptical ? bound * m.flattening : Math.max(m.discHeight * 5, m.bulgeScale * 2.5);
+  let zBound = elliptical ? bound * m.flattening : Math.max(m.discHeight * 5, m.bulgeScale * 2.5);
+  if (m.warp) zBound += m.warp * bound * 1.8;
+  if (m.polarPeak) zBound = Math.max(zBound, R * (m.polarR + m.polarW * 2.5));
   let peak = 0;
   for (let a = -10; a <= 10; a++) {
     for (let b = -10; b <= 10; b++) peak = Math.max(peak, densityAt(m, (a / 10) * bound * 0.6, (b / 10) * bound * 0.6, 0));
@@ -267,8 +269,15 @@ function* build(slot, frame) {
     if (m.ringPeak) young = Math.max(young, discShare * Math.exp(-(((Math.hypot(x, y) / R - m.ringR) / m.ringW) ** 2)));
     young = Math.min(Math.max(young + (m.youngBias ?? 0) * discShare, 0), 1);
     if (elliptical) young = 0;
+    if (m.polarPeak || m.tidal) {
+      // Polar rings and tidal tails are where the gas went: young and blue.
+      const outer = Math.hypot(x, y) > R * 1.02 || Math.abs(z) > m.discHeight * 4;
+      if (outer && !elliptical) young = Math.max(young, 0.7);
+      else if (outer) young = 0.6;
+    }
     const knot = young > 0.55 && random() < 0.05 * (m.knotRate ?? 1);
     let colour = mixColour(mixColour(OLD, DISC, discShare), YOUNG, Math.min(young * 1.2, 1));
+    if (m.tint) colour = [colour[0] * m.tint[0], colour[1] * m.tint[1], colour[2] * m.tint[2]];
     // Two scales: wide sprites that overlap into smooth light and carry most
     // of it, and smaller ones that keep the arms and knots sharp.
     const smooth = placed % 3 === 0;
@@ -289,6 +298,19 @@ function* build(slot, frame) {
     gc[placed * 3] = colour[0] * weight * jitter;
     gc[placed * 3 + 1] = colour[1] * weight * jitter;
     gc[placed * 3 + 2] = colour[2] * weight * jitter;
+    flux += weight * size * size;
+    placed++;
+  }
+  if (m.agn && placed < glow.count) {
+    const size = R * 0.006;
+    const weight = (m.agn * 0.02 * flux) / (size * size);
+    gp[placed * 3] = 0;
+    gp[placed * 3 + 1] = 0;
+    gp[placed * 3 + 2] = 0;
+    gs[placed] = size;
+    gc[placed * 3] = 0.9 * weight;
+    gc[placed * 3 + 1] = 0.95 * weight;
+    gc[placed * 3 + 2] = 1.0 * weight;
     flux += weight * size * size;
     placed++;
   }
@@ -325,7 +347,7 @@ function* build(slot, frame) {
     if (random() > p) continue;
     dp[dusty * 3] = x;
     dp[dusty * 3 + 1] = y;
-    dp[dusty * 3 + 2] = gaussian(random) * m.discHeight * (diffuse ? 0.25 : 0.35);
+    dp[dusty * 3 + 2] = warpAt(m, x, y) + gaussian(random) * m.discHeight * (diffuse ? 0.25 : 0.35);
     ds[dusty] = diffuse ? R * (0.04 + random() * 0.04) : R * (0.018 + random() * 0.03);
     dt[dusty] = diffuse ? 0.025 + random() * 0.04 : 0.07 + random() * 0.14;
     dusty++;
@@ -513,10 +535,15 @@ export class GalaxySprites {
       free.gen = build(free, w.frame);
     }
 
+    // The galaxy you are looking at most closely is the one whose absence
+    // shows, so while it is still being built it gets a larger share.
+    const lead = wanted[0] && this.slots.find((s) => s.frame?.key === wanted[0].frame.key);
+    const budget = lead && !lead.ready ? Math.max(budgetMs, 9) : budgetMs;
     const t0 = performance.now();
-    for (const slot of this.slots) {
+    const buildOrder = lead ? [lead, ...this.slots.filter((s) => s !== lead)] : this.slots;
+    for (const slot of buildOrder) {
       if (!slot.gen) continue;
-      while (performance.now() - t0 < budgetMs) {
+      while (performance.now() - t0 < budget) {
         if (slot.gen.next().done) {
           slot.gen = null;
           slot.ready = true;
@@ -527,6 +554,10 @@ export class GalaxySprites {
 
     const pxOf = new Map(wanted.map((w) => [w.frame.key, w.px]));
     const step = 1 - Math.exp(-dt * 3);
+    // Pushed out of the few, a galaxy has to let go of its slot. Faded only by
+    // its size on screen, one still large never did, and a new galaxy flown
+    // to waited for a slot until you moved far enough for one to shrink.
+    const evict = 1 - Math.exp(-dt * 10);
     // Furthest galaxy first, its glow then its dust, then the next nearer.
     // Drawing every glow before every dust let the Milky Way's lanes, fifty
     // kiloparsecs behind, darken the Magellanic Clouds in front of it. The
@@ -542,10 +573,11 @@ export class GalaxySprites {
     for (const slot of this.slots) {
       const f = slot.frame;
       const px = f ? pxOf.get(f.key) ?? 0 : 0;
-      const target = f && slot.ready && this.visible
+      const kept = f && keep.has(f.key);
+      const target = kept && slot.ready && this.visible
         ? Math.min(1, Math.max(0, (px - HANDOVER_PX[0]) / (HANDOVER_PX[1] - HANDOVER_PX[0])))
         : 0;
-      slot.fade += (target - slot.fade) * step;
+      slot.fade += (target - slot.fade) * (f && !kept ? evict : step);
       if (Math.abs(target - slot.fade) < 0.002) slot.fade = target;
       const on = Boolean(f) && slot.ready && slot.fade > 0.003;
       slot.glow.points.visible = on;

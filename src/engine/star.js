@@ -26,10 +26,24 @@ const SURFACE_VERTEX = /* glsl */ `
   #include <common>
   #include <logdepthbuf_pars_vertex>
 
+  uniform float uLumpy;
+  uniform float uSeed;
+  uniform float uTime;
   varying vec3 vDir;
+  varying float vLift;
+
+  ${TERRAIN_GLSL}
+
   void main() {
     vDir = normalize(position);
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    // The giant cells heave the surface in and out, slowly.
+    float lift = 0.0;
+    if (uLumpy > 0.0) {
+      lift = fbmd(vDir * 1.7 + vec3(uSeed, uTime * 0.002, -uSeed), 3, 2.1, 0.5).x - 0.5;
+    }
+    vLift = lift;
+    vec3 p = position * (1.0 + lift * uLumpy * 2.0);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
 
     #include <logdepthbuf_vertex>
   }
@@ -52,8 +66,10 @@ const SURFACE_FRAGMENT = /* glsl */ `
   uniform float uSpots;
   uniform vec2 uLimb;
   uniform float uSeed;
+  uniform float uLumpy;
 
   varying vec3 vDir;
+  varying float vLift;
 
   ${TERRAIN_GLSL}
 
@@ -72,7 +88,7 @@ const SURFACE_FRAGMENT = /* glsl */ `
     float cells = fbmd(dir * uGranScale * 0.17 + vec3(uTime * 0.012, uSeed, 0.0), 4, 2.1, 0.5).x;
     float supergran = fbmd(dir * max(uGranScale * 0.043, 1.5) + uSeed, 3, 2.07, 0.45).x;
     float texture = 0.38 * gran + 0.16 * cells + 0.10 * supergran;
-    base *= 1.0 + (texture - 0.32) * uGranContrast * 2.2;
+    base *= max(1.0 + (texture - 0.32) * uGranContrast * 2.2, 0.5);
     base *= mix(vec3(1.0), vec3(1.0, 0.86, 0.72), (1.0 - gran) * uGranContrast * 0.35);
 
     // Starspots: dark, cool umbrae inside a lighter penumbra, in belts either
@@ -85,6 +101,13 @@ const SURFACE_FRAGMENT = /* glsl */ `
     base *= mix(vec3(1.0), vec3(0.32, 0.22, 0.16), umbra);
     float faculae = smoothstep(0.55, 0.9, gran) * (1.0 - spotMask) * uGranContrast;
     base += uColour * faculae * 0.45;
+    // Where the cells rise the gas is hotter and brighter, where it sinks dark
+    // and red: the mottling a supergiant's disc is covered in.
+    if (uLumpy > 0.0) {
+      float heave = clamp(vLift * 2.4, -1.0, 1.0);
+      vec3 mottle = mix(vec3(0.6, 0.44, 0.32), vec3(1.55, 1.36, 1.05), smoothstep(-0.8, 0.8, heave));
+      base *= mix(vec3(1.0), mottle, min(uLumpy * 18.0, 1.0));
+    }
 
     // Quadratic limb darkening, coefficients by temperature.
     float mu = clamp(dot(dir, normalize(uCameraLocal)), 0.0, 1.0);
@@ -129,13 +152,36 @@ const CORONA_FRAGMENT = /* glsl */ `
   uniform vec3 uColour;
   uniform float uIntensity;
   uniform float uDiscFraction;   // photosphere radius as a fraction of the quad
+  uniform float uShell;
+  uniform float uSeed;
   varying vec2 vUv;
+
+  float shellHash(float n) { return fract(sin(n) * 43758.5453); }
 
   void main() {
     float d = length(vUv);
     if (d >= 1.0) discard;
 
     #include <logdepthbuf_fragment>
+
+    // Dust a supergiant has shed: broken arcs at a few radii, lit by the star
+    // from inside, dull orange. In star radii, so they hold their place on the
+    // disc however the billboard is scaled.
+    float shellLight = 0.0;
+    if (uShell > 0.0) {
+      float rs = d / max(uDiscFraction, 1e-4);
+      float ang = atan(vUv.y, vUv.x);
+      for (int k = 0; k < 4; k++) {
+        float fk = float(k);
+        float rk = 1.6 + fk * (0.9 + shellHash(uSeed + fk) * 0.9);
+        float wk = 0.08 + 0.12 * shellHash(uSeed * 1.7 + fk);
+        float arc = exp(-pow((rs - rk) / wk, 2.0));
+        // Each shell only part of the way round, lopsided like real ones.
+        float span = smoothstep(-0.2, 0.7, sin(ang * (1.0 + fk) + shellHash(uSeed + fk * 3.1) * 6.28));
+        shellLight += arc * span / (1.0 + fk * 0.6);
+      }
+      shellLight *= uShell * (1.0 - smoothstep(0.85, 1.0, d));
+    }
 
 
     // Measured outwards from the limb rather than from the centre, so the glow
@@ -169,7 +215,8 @@ const CORONA_FRAGMENT = /* glsl */ `
     // limb darkening instead of being washed flat by the glow painted over it.
     glow *= smoothstep(uDiscFraction * 0.8, uDiscFraction * 1.04, d);
 
-    gl_FragColor = vec4(uColour * uIntensity * glow, 1.0);
+    vec3 dust = vec3(1.0, 0.55, 0.28) * shellLight * 0.35 * smoothstep(uDiscFraction * 1.1, uDiscFraction * 1.5, d);
+    gl_FragColor = vec4(uColour * uIntensity * glow + dust * uIntensity, 1.0);
   }
 `;
 
@@ -285,6 +332,7 @@ export class Star {
         uSpots: { value: surface.spots },
         uLimb: { value: new Vector2(...surface.limb) },
         uSeed: { value: surface.seed },
+        uLumpy: { value: surface.lumpy ?? 0 },
       },
       vertexShader: SURFACE_VERTEX,
       fragmentShader: SURFACE_FRAGMENT,
@@ -293,13 +341,18 @@ export class Star {
     this.mesh.frustumCulled = false;
     this.group.add(this.mesh);
 
-    this.baseCorona = intensity * 0.22;
+    this.baseCorona = intensity * 0.22 * (surface.glow ?? 1);
+    // The glow of a swollen star reaches several of its own radii out, and
+    // its dust shells further still.
+    this.coronaReach = (surface.shell ?? 0) > 0 ? 7 : (surface.glow ?? 1) > 1.3 ? 3.5 : 1.6;
     this.coronaMaterial = new ShaderMaterial({
       uniforms: {
         uColour: { value: new Color(...colour) },
         uIntensity: { value: this.baseCorona },
         uScale: { value: radiusKm * 3 },
         uDiscFraction: { value: 1 / 3 },
+        uShell: { value: surface.shell ?? 0 },
+        uSeed: { value: surface.seed },
       },
       vertexShader: CORONA_VERTEX,
       fragmentShader: CORONA_FRAGMENT,
@@ -351,7 +404,7 @@ export class Star {
     // The corona is sized in world units, so it has to grow with distance to
     // hold a constant angular size; capped so it never swallows the disc when
     // you are close.
-    const discScale = Math.max(this.radius * 1.6, Math.min(distanceKm * 0.06, this.radius * 40));
+    const discScale = Math.max(this.radius * this.coronaReach, Math.min(distanceKm * 0.06, this.radius * 40));
     const discPixels = pixelsPerRadian ? (this.radius / distanceKm) * pixelsPerRadian * 2 : Infinity;
 
     /*

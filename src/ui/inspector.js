@@ -104,6 +104,21 @@ const CRAFT_CLASS = {
   debris: 'Derelict',
 };
 
+const LIFE_WORDS = {
+  none: 'None detected',
+  unicellular: 'Microbial: mats and blooms in the shallows',
+  multicellular: 'Complex: vegetation colours the land',
+  exotic: 'Exotic biochemistry',
+  aerial: 'Floating organisms in the cloud deck',
+};
+
+const VOLATILE_WORDS = {
+  lacustrine: 'lakes and inland seas',
+  marine: 'seas over about half the surface',
+  oceanic: 'oceans with scattered continents',
+  superoceanic: 'a global ocean, a few islands',
+};
+
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
   'August', 'September', 'October', 'November', 'December'];
 
@@ -269,6 +284,13 @@ export function describe(resolved, context = {}) {
     );
     add('Effective temperature', system?.teff ?? profile?.teff ? `${num(system?.teff ?? profile.teff)} K` : null);
     add('Luminosity', profile?.luminositySol ? `${num(profile.luminositySol, profile.luminositySol < 10 ? 2 : 0)} L\u2609` : null);
+    const c = system?.companionInfo;
+    if (c) {
+      const what = c.whiteDwarf ? 'White dwarf' : `${num(c.teff)} K star, ${num(c.radiusSol, 2)} R\u2609`;
+      const where = c.separationAu < 1 ? `${num(c.separationAu, 3)} AU` : `${num(c.separationAu, 0)} AU`;
+      add('Companion', `${what} \u00b7 ${where} \u00b7 ${c.close ? 'close binary, planets circle both' : 'wide binary, a second sun'}`, true);
+      add('Binary period', c.periodDays < 700 ? `${num(c.periodDays, 1)} d` : `${num(c.periodDays / 365.25, 0)} yr`);
+    }
     add(system?.generated ? 'Planets' : 'Known planets', system?.planets?.length ? String(system.planets.length) : null);
     if (system?.planets?.length) {
       add('System', system.planets.map((p) => p.name).join(', '), true);
@@ -323,6 +345,21 @@ export function describe(resolved, context = {}) {
   }
   add('Geometric albedo', phys?.albedo != null ? num(phys.albedo, 3) : null);
   add('Atmosphere', phys?.atmosphere, true);
+
+  // An exoplanet or one of its moons: everything here is inferred from the
+  // temperature and size, and is the same on every visit.
+  const d = spec.details;
+  if (d && !phys) {
+    if (d.temperatureK) add('Mean temperature', kelvin(Math.round(d.temperatureK)));
+    if (d.air) {
+      if (d.air.pressureBar) add('Surface pressure', `${num(d.air.pressureBar, d.air.pressureBar < 0.1 ? 3 : 2)} bar`);
+      add('Atmosphere', d.air.gases.slice(0, 4).map(([gas, pct]) => `${gas} ${num(pct, pct < 1 ? 2 : 1)}%`).join(', '), true);
+    } else {
+      add('Atmosphere', 'None to speak of', true);
+    }
+    if (d.oceanKind) add('Oceans', `${d.oceanKind} \u00b7 ${VOLATILE_WORDS[d.volatiles] ?? d.volatiles}`, true);
+    add('Life', LIFE_WORDS[d.life] ?? null, true);
+  }
 
   if (spec.rotationHours) {
     const tidallyLocked =

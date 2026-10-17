@@ -61,10 +61,10 @@ const HINT = platform.touch
     walking: 'Hold W/S to walk \u00b7 step A/D \u00b7 rise E, crouch Q \u00b7 drag to look',
   }
   : {
-    flying: 'Thrust W/S \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 drag to steer',
-    roaming: 'Thrust W/S \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 drag to turn \u00b7 wheel sets speed',
+    flying: 'Thrust W/S \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 hold to accelerate \u00b7 [ ] set speed \u00b7 drag to steer',
+    roaming: 'Thrust W/S \u00b7 slide A/D \u00b7 climb E, dive Q \u00b7 hold to accelerate \u00b7 wheel or [ ] set speed \u00b7 drag to turn',
     ship: 'Throttle W/S \u00b7 turn A/D, arrows \u00b7 roll Q/E \u00b7 drag to steer \u00b7 Shift boost \u00b7 J warp \u00b7 V view \u00b7 X stop',
-    walking: 'Walk W/S \u00b7 step A/D \u00b7 Shift runs \u00b7 rise E, crouch Q \u00b7 drag to look \u00b7 wheel sets pace',
+    walking: 'Walk W/S \u00b7 step A/D \u00b7 Shift runs \u00b7 [ ] set pace \u00b7 wheel rises, scroll out to take off \u00b7 drag to look',
   };
 
 export function createFlightControls({ controls, prefs }) {

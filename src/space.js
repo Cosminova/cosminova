@@ -57,6 +57,8 @@ import {
   createDeepObjects, CLUSTERS, CLUSTER_LABELS, NEBULAE, NEBULA_LABELS, NEUTRON_LABELS, NEUTRON_STARS,
   NEUTRON_STAR_RADIUS_KM,
 } from './engine/deep-objects.js';
+import { SkyTint } from './engine/sky-tint.js';
+import { createOrbitLines } from './engine/orbit-lines.js';
 import { buildColorLookup, colorIndexToLinearRgb } from './color.js';
 import { describeStar, spectralTemperature, starLook, starTint, surfaceBrightness, SOLAR_TEFF } from './engine/stellar.js';
 import { hashName } from './engine/classify.js';
@@ -122,6 +124,7 @@ const state = {
   showBlackHoles: true,
   showDistantMarkers: true,
   showRings: true,
+  showOrbits: false,
   showNightLights: true,
   showCraftVectors: true,
   terrainShadows: true,
@@ -269,6 +272,8 @@ const skyGroup = new Group();
 skyGroup.rotation.x = -ECLIPTIC_OBLIQUITY;
 skyGroup.add(milkyWay.mesh);
 skyScene.add(skyGroup);
+const skyTint = new SkyTint();
+skyScene.add(skyTint.mesh);
 
 const extras = new Group();
 scene.add(extras);
@@ -282,6 +287,8 @@ earthHorizon.frustumCulled = false;
 earthHorizon.renderOrder = -2;
 scene.add(earthHorizon);
 const distantBodies = createDistantBodies();
+const orbitLines = createOrbitLines();
+scene.add(orbitLines.group);
 scene.add(distantBodies.object);
 
 // Spacecraft. The field holds where every craft is at the current date; the
@@ -405,6 +412,31 @@ for (const spec of BLACK_HOLES) {
   extras.add(hole.group);
 }
 const deepObjects = createDeepObjects();
+
+/**
+ * The sky's own glow from where the camera is: inside a nebula or a cluster,
+ * or deep in a galaxy's bulge, where the unresolved light of its stars is a
+ * golden haze over everything.
+ */
+const coreDir = new Vector3();
+function skyLookFrom(cam) {
+  let look = deepObjects.skyLook(cam);
+  for (const galaxy of [cosmos.milkyWay, cosmos.active]) {
+    if (!galaxy?.center) continue;
+    const core = galaxy.radiusKm * 0.12;
+    const d = cam.distanceTo(galaxy.center);
+    if (d > core) continue;
+    const strength = 0.06 * (1 - d / core) ** 1.6;
+    if (look && look.strength >= strength) continue;
+    look = {
+      strength,
+      colours: [[1.0, 0.72, 0.4], [0.9, 0.5, 0.28], [1.0, 0.9, 0.7]],
+      centre: d > 1 ? coreDir.subVectors(galaxy.center, cam).normalize().clone() : new Vector3(0, 0, 1),
+      seed: ((galaxy.seed ?? 7) % 1000) / 37,
+    };
+  }
+  return look;
+}
 extras.add(deepObjects.group);
 
 async function loadBodyTextures(key) {
@@ -1220,6 +1252,7 @@ function maybeLoadExo(key) {
   unloadExo();
   exoSystem = new ExoSystem(system);
   extras.add(exoSystem.star.group);
+  if (exoSystem.companion) extras.add(exoSystem.companion.star.group);
   for (const item of exoSystem.planets) extras.add(item.planet.group);
   for (const moon of exoSystem.moons) extras.add(moon.planet.group);
   // Bodies have to be somewhere before anything can be put in orbit around them.
@@ -1513,6 +1546,9 @@ controls.onClick = (x, y) => {
   if (hit) selectTarget(hit.key, { fly: true });
 };
 
+controls.canWalk = () =>
+  !state.viewFromEarth && !state.riding && resolveWorld(state.target)?.kind === 'body' && Boolean(surfaceOf(state.target));
+
 /**
  * Applies one row of the options table to the scene.
  *
@@ -1567,6 +1603,9 @@ function setView(key, enabled) {
     case 'rings':
       state.showRings = enabled;
       if (ringSystem) ringSystem.mesh.visible = enabled;
+      break;
+    case 'orbits':
+      state.showOrbits = enabled;
       break;
     case 'nightLights':
       state.showNightLights = enabled;
@@ -1885,6 +1924,25 @@ function exoFlux(luminositySol, au) {
 }
 
 /**
+ * A planet or moon of the loaded system as a point of reflected light, once it
+ * is too small to draw: the way a system reads in SpaceEngine, its worlds and
+ * their moons strung out as sparks round the star.
+ */
+const tmpDot = new Vector3();
+function addExoDot(body, distanceKm, hostLum, fromStarKm) {
+  const palette = body.spec.palette;
+  const tint = body.spec.atmosphere?.tint ?? (palette ? palette[0] : [0.8, 0.78, 0.74]);
+  renderOffset(tmpDot, body.world, body.spec.key);
+  distantBodies.addReflected(tmpDot, tint, {
+    radiusKm: body.spec.radiusKm,
+    distanceKm,
+    flux: exoFlux(hostLum, fromStarKm / 149597870.7),
+    albedo: body.spec.atmosphere ? 0.45 : 0.25,
+    limit: 11.5 + 2.5 * Math.log10(Math.max(58 / Math.max(camera.fov, 1e-4), 1)),
+  });
+}
+
+/**
  * Sunlight for an exoplanet surface, exposed for where the camera actually is.
  *
  * Flux within one system spans orders of magnitude — TRAPPIST-1e takes 0.65
@@ -1958,7 +2016,6 @@ let roamSurfaceKm = Infinity;
 const roamNearest = { key: null, position: null, radius: 0 };
 const tmpShipWorld = new Vector3();
 const tmpShipUp = new Vector3();
-const tmpWalkProbe = new Vector3();
 const tmpUnitScale = new Vector3(1, 1, 1);
 const tmpBodyInverse = new Quaternion();
 
@@ -2033,6 +2090,7 @@ function floorBeforeControls(resolved, now) {
   cameraGround.altitudeKm = Infinity;
   controls.minDistanceRadii = 1.000001;
   controls.horizon = null;
+  controls.groundFloor = false;
   if (controls.mode === 'roam' || state.viewFromEarth || state.riding || !resolved) return;
   // A galaxy has no surface to stop at. Held a radius out, you could look at
   // the Magellanic Clouds but never go into them, among their stars.
@@ -2049,24 +2107,87 @@ function floorBeforeControls(resolved, now) {
   const surface = surfaceOf(resolved.key);
   controls.walkFrame = surface?.orientation ?? null;
   controls.walkAxisScale.copy(surface?.planet.material.uniforms.uAxisScale?.value ?? tmpUnitScale);
-  // A walker's position is a direction on the undistorted sphere, which on a
-  // flattened body is not the direction of the camera from the centre.
-  const probePoint = controls.mode === 'walk' && surface
-    ? tmpWalkProbe.copy(controls.walkLocal).applyQuaternion(surface.orientation)
-      .multiplyScalar(surface.radius).add(surface.position)
-    : controls.worldPosition;
-  const ground = groundUnder(resolved.key, probePoint, now);
-  if (!ground) return;
-  const radius = resolved.radius;
-  if (controls.mode === 'walk') {
-    controls.walkGroundKm = ground.groundKm;
-    cameraGround.altitudeKm = controls.walkEyeKm;
+  if (controls.mode === 'walk' && surface) {
+    walkOnGround(surface, resolved.key, now);
     return;
   }
+  const ground = groundUnder(resolved.key, controls.worldPosition, now);
+  if (!ground) return;
+  const radius = resolved.radius;
   const floor = (radius + ground.groundKm + GROUND_CLEARANCE_KM) / radius;
   controls.minDistanceRadii = Math.max(1.000001, floor);
+  controls.groundFloor = true;
   if (controls.distanceRadii < controls.minDistanceRadii) controls.distanceRadii = controls.minDistanceRadii;
   cameraGround.altitudeKm = ground.distance - radius - ground.groundKm;
+}
+
+/**
+ * The ground under a walker.
+ *
+ * The height function at the walker's own point is not enough. The mesh drawn
+ * there is triangles between vertices a quad apart, and in a hollow the
+ * triangle passes above the true surface, so an eye placed on the true surface
+ * ends up under the drawn one, looking at the underside of the terrain. So the
+ * ground is the highest of a three-by-three spread at the drawn vertex spacing,
+ * which no triangle around the walker can rise above.
+ *
+ * Read back asynchronously: a walker crosses a metre a frame at a run, and a
+ * synchronous read every frame stalls the whole pipeline while it does.
+ */
+const walkProbe = { key: null, dirs: Array.from({ length: 9 }, () => new Vector3()), km: null, at: 0, last: 0, dir: new Vector3() };
+const walkRight = new Vector3();
+function walkOnGround(surface, key, now) {
+  const planet = surface.planet;
+  const up = controls.walkLocal;
+  if (walkProbe.key !== key) {
+    walkProbe.key = key;
+    walkProbe.km = null;
+    walkProbe.at = -Infinity;
+  }
+  // Wider at speed, to cover the ground crossed while a read is in flight.
+  const ahead = (controls.walkVelocity * 0.2) / surface.radius;
+  const spacing = Math.max(planet.finestSpacingRadians() * 2, ahead, 2e-7);
+  const moved = walkProbe.dir.angleTo(up);
+  const fresh = walkProbe.km === null;
+  if ((moved > spacing * 0.25 || now - walkProbe.at > 200) && planet.group.visible) {
+    walkRight.crossVectors(controls.walkHeadingLocal, up).normalize();
+    let n = 0;
+    for (let i = -1; i <= 1; i++) {
+      for (let j = -1; j <= 1; j++) {
+        walkProbe.dirs[n++].copy(up)
+          .addScaledVector(controls.walkHeadingLocal, i * spacing)
+          .addScaledVector(walkRight, j * spacing)
+          .normalize();
+      }
+    }
+    const uniforms = planet.material.uniforms;
+    const wet = uniforms.uHasOcean?.value > 0 || planet.spec?.oceanFraction > 0;
+    const settle = (heights) => {
+      let km = -Infinity;
+      for (const h of heights) if (Number.isFinite(h) && Math.abs(h) < surface.radius * 0.25) km = Math.max(km, h);
+      if (!Number.isFinite(km)) return;
+      if (wet) km = Math.max(km, uniforms.uSeaLevelKm?.value ?? 0);
+      walkProbe.km = km;
+    };
+    const pending = walkProbe.km === null ? null : planet.groundHeightsKmAsync(renderer, walkProbe.dirs);
+    if (pending) pending.then(settle, () => {});
+    else if (walkProbe.km === null || !renderer.readRenderTargetPixelsAsync) settle(planet.groundHeightsKm(renderer, walkProbe.dirs));
+    if (pending || walkProbe.km !== null) {
+      walkProbe.at = now;
+      walkProbe.dir.copy(up);
+    }
+  }
+  if (walkProbe.km !== null) {
+    // Up at once and down gently: stepping onto a rise must never put the eye
+    // inside it for a frame, and a dip is no hurry.
+    const dt = Math.min(Math.max((now - walkProbe.last) / 1000, 0), 0.25);
+    const gap = walkProbe.km - controls.walkGroundKm;
+    controls.walkGroundKm += gap > 0 || fresh ? gap : gap * Math.min(1, dt * 5);
+  }
+  walkProbe.last = now;
+  cameraGround.key = key;
+  cameraGround.km = controls.walkGroundKm;
+  cameraGround.altitudeKm = controls.walkEyeKm;
 }
 
 /**
@@ -2489,6 +2610,50 @@ function pick(clientX, clientY) {
   return pickNamed(clientX, clientY)?.key ?? null;
 }
 
+/**
+ * The nearest solid body along the pointer's ray, and how far off it is.
+ *
+ * Points and markers are picked by how near they project to the pointer, which
+ * on its own knows nothing of what is in the way: a star directly behind a
+ * planet, or a moon on the far side of it, could be clicked straight through
+ * the planet. Anything farther than this is hidden and is not offered.
+ */
+const occludeRay = new Vector3();
+const occludeCentre = new Vector3();
+function pointerOcclusion(nx, ny) {
+  camera.updateMatrixWorld();
+  occludeRay.set(nx, ny, 0.5).unproject(camera).sub(camera.position).normalize();
+  let nearest = { key: null, km: Infinity };
+  const sphere = (key, world, radius, frameKey = null) => {
+    if (!world || !(radius > 0)) return;
+    renderOffset(occludeCentre, world, frameKey, null).sub(camera.position);
+    const dist = occludeCentre.length();
+    // Standing on it, the sphere has to pass under the eye, or the ground
+    // below a basin would hide the whole sky.
+    const r = Math.min(radius, dist - Math.max(dist * 1e-9, 0.001));
+    if (r <= 0) return;
+    const along = occludeCentre.dot(occludeRay);
+    const miss = dist * dist - along * along;
+    if (miss > r * r) return;
+    const t = along - Math.sqrt(r * r - miss);
+    if (t > 0 && t < nearest.km) nearest = { key, km: t };
+  };
+  const fromSun = controls.worldPosition.distanceTo(universe.get('sun').position);
+  if (fromSun < 1000 * PC_KM) sphere('sun', universe.get('sun').position, SUN.radiusKm);
+  if (fromSun < PC_KM) {
+    for (const [key, planet] of planets) {
+      if (planet.group.visible) sphere(key, universe.get(key).position, planet.radius, key);
+    }
+  }
+  if (exoSystem) {
+    sphere(exoSystem.key, exoSystem.position, exoSystem.star.radius, exoSystem.key);
+    if (exoSystem.companion) sphere(null, exoSystem.companion.world, exoSystem.companion.star.radius);
+    for (const item of exoSystem.planets) sphere(item.spec.key, item.world, item.spec.radiusKm, item.spec.key);
+    for (const moon of exoSystem.moons) sphere(moon.spec.key, moon.world, moon.spec.radiusKm, moon.spec.key);
+  }
+  return nearest;
+}
+
 /** The named thing under the pointer and how good a hit it is, lower being better. */
 function pickNamed(clientX, clientY) {
   const width = renderer.domElement.clientWidth;
@@ -2498,9 +2663,11 @@ function pickNamed(clientX, clientY) {
   camera.updateMatrixWorld();
   let best = null;
   let bestScore = 28;
+  const blocker = pointerOcclusion(nx, ny);
 
   const consider = (key, world, radius, minPixels = 0, frameKey = null, local = null) => {
     renderOffset(tmpVector, world, frameKey, local);
+    if (key !== blocker.key && tmpVector.distanceTo(camera.position) - radius > blocker.km) return;
     tmpProj.copy(tmpVector).applyMatrix4(camera.matrixWorldInverse);
     tmpProj.applyMatrix4(camera.projectionMatrix);
     if (tmpProj.z < -1 || tmpProj.z > 1) return;
@@ -2563,6 +2730,12 @@ function pickNamed(clientX, clientY) {
       item.state.local,
     );
   }
+  // A body filling the view under the pointer is what was clicked, however
+  // far its centre projects from it — unless it is the one already chosen,
+  // where a click on its ground is not a request to fly to it again.
+  if (!best && blocker.key && blocker.key !== state.target) {
+    return { key: blocker.key, score: 0 };
+  }
   return best ? { key: best, score: bestScore } : null;
 }
 
@@ -2596,9 +2769,11 @@ function pickDot(clientX, clientY) {
   const cam = controls.worldPosition;
   let best = null;
   let bestScore = DOT_PICK_PX;
+  const hidden = pointerOcclusion((clientX / width) * 2 - 1, -(clientY / height) * 2 + 1).km;
   const test = (x, y, z, bonus) => {
     const w = e[3] * x + e[7] * y + e[11] * z + e[15];
     if (!(w > 0)) return false;
+    if (hidden < Infinity && x * x + y * y + z * z > hidden * hidden) return false;
     const sx = ((e[0] * x + e[4] * y + e[8] * z + e[12]) / w * 0.5 + 0.5) * width;
     const sy = (0.5 - (e[1] * x + e[5] * y + e[9] * z + e[13]) / w * 0.5) * height;
     const d = Math.hypot(sx - clientX, sy - clientY);
@@ -3036,7 +3211,14 @@ function frame(now) {
         const tint = planet.spec.atmosphere
           ? planet.spec.atmosphere.tint
           : [0.85, 0.82, 0.76];
-        distantBodies.add(planet.group.position, tint, apparentPixels, (planet.spec.albedoBoost ?? 1) * 0.4);
+        const au = bodyState.position.distanceTo(sunState.position) / 149597870.7;
+        distantBodies.addReflected(planet.group.position, tint, {
+          radiusKm: planet.radius,
+          distanceKm: distance,
+          flux: 1 / Math.max(au * au, 1e-9),
+          albedo: Math.min(0.9, 0.35 * (planet.spec.albedoBoost ?? 1)),
+          limit: 11.5 + 2.5 * Math.log10(Math.max(58 / Math.max(camera.fov, 1e-4), 1)),
+        });
       }
       continue;
     }
@@ -3179,8 +3361,6 @@ function frame(now) {
 
     considerUpgrade(key, apparentPixels);
   }
-  distantBodies.end(renderer.getPixelRatio());
-  if (!state.showDistantMarkers) distantBodies.object.visible = false;
 
   // The trajectory is absolute world kilometres and is rebuilt rather than
   // re-centred when the date moves, since the centre body has moved with it.
@@ -3237,10 +3417,27 @@ function frame(now) {
     // thing in that sky you cannot be without, and it is a point source out
     // past a few au, which is exactly where a size threshold would drop it.
     exoSystem.star.group.visible = true;
+    const companion = exoSystem.companion;
+    if (companion) {
+      renderOffset(companion.star.group.position, companion.world, exoSystem.key, companion.local);
+      tmpCameraLocal.copy(companion.star.group.position).negate();
+      const d = tmpCameraLocal.length();
+      companion.star.update({
+        cameraLocal: tmpCameraLocal,
+        time: now / 1000,
+        distanceKm: d,
+        pixelsPerRadian,
+        visibility: pointVisibility(companion.luminositySol, d, 8.7 + 2.5 * Math.log10(Math.max(58 / Math.max(camera.fov, 1e-4), 1))),
+        brightness: exoSunIntensity(exoFlux(companion.luminositySol, d / 149597870.7), exoReference, state.exposure),
+        flare: !controls.flying,
+      });
+      companion.star.group.visible = true;
+    }
     for (const item of exoSystem.planets) {
       const distance = cameraLocalIn(item.world, item.spec.key, tmpCameraLocal).length();
       const apparentPixels = (item.spec.radiusKm / distance) * pixelsPerRadian * 2;
       item.planet.group.visible = apparentPixels > 0.7;
+      if (apparentPixels < 3) addExoDot(item, distance, hostLum, item.local.length());
       if (!item.planet.group.visible) continue;
       // Once, and only for a world close enough to be worth it: the waterline
       // has to be measured against this planet's own relief.
@@ -3283,6 +3480,7 @@ function frame(now) {
       const distance = cameraLocalIn(moon.world, moon.spec.key, tmpCameraLocal).length();
       const apparentPixels = (moon.spec.radiusKm / distance) * pixelsPerRadian * 2;
       moon.planet.group.visible = apparentPixels > 0.7;
+      if (apparentPixels < 3) addExoDot(moon, distance, hostLum, moon.local.length());
       if (!moon.planet.group.visible) continue;
       placeRelative(moon.planet.group, moon.world, moon.spec.key);
       tmpSunLocal.copy(moon.local).negate().normalize();
@@ -3302,6 +3500,16 @@ function frame(now) {
       });
     }
   }
+  distantBodies.end(renderer.getPixelRatio());
+  if (!state.showDistantMarkers) distantBodies.object.visible = false;
+  orbitLines.update({
+    visible: state.showOrbits,
+    universe,
+    date: state.date,
+    exoSystem,
+    place: placeRelative,
+    nearHome: cam.distanceTo(sunState.position) < 3e10,
+  });
 
   /*
    * Only the star being looked at is drawn as a sphere; every other star in
@@ -3363,6 +3571,7 @@ function frame(now) {
     exposure: state.exposure,
     steps: platform.mobile ? 28 : 44,
   });
+  skyTint.set(skyLookFrom(cam));
 
   const viewingGalaxy = resolved?.kind === 'galaxy';
   const fromSun = sunDistance;

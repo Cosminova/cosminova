@@ -164,6 +164,15 @@ function vary(m, seed) {
   const pick = (list) => list[Math.floor(random() * list.length)];
   m.youngBias = 0;
   m.knotRate = 1;
+  // Old light ranges from straw to rose and young from white to deep blue;
+  // the same model in two galaxies should not come out the same colour.
+  m.tint = [1 + (random() - 0.5) * 0.22, 1 + (random() - 0.5) * 0.08, 1 + (random() - 0.5) * 0.26];
+  // An active nucleus: a point brighter than the bulge round it.
+  m.agn = random() < 0.12 ? 0.5 + random() * 2.5 : 0;
+  if (m.family !== 'elliptical' && m.family !== 'irregular' && random() < 0.3) {
+    // Warped at the edge, as most discs are when looked at closely.
+    m.warp = 0.04 + random() * 0.12;
+  }
   if (m.family === 'spiral' || m.family === 'barred') {
     m.arms = m.family === 'barred' ? pick([2, 2, 2, 3, 4]) : pick([2, 2, 3, 4, 4, 5, 6]);
     m.pitch = Math.tan((7 + random() * 23) * Math.PI / 180);
@@ -197,6 +206,14 @@ function vary(m, seed) {
       m.youngBias = -0.6;
       m.knotRate = 0.15;
     }
+    if (random() < 0.1) {
+      // Interacting: two long tails pulled out past the disc by a passing
+      // neighbour, loose and blue with the stars the encounter set forming.
+      m.tidal = 0.5 + random() * 0.6;
+      m.tidalPhase = random() * Math.PI * 2;
+      m.boundPc = m.radiusPc * 2.1;
+      m.knotRate = Math.max(m.knotRate, 2);
+    }
   } else if (m.family === 'lenticular') {
     m.bulgePeak *= pick([0.6, 1, 1.5]);
     if (random() < 0.35) {
@@ -204,7 +221,9 @@ function vary(m, seed) {
       m.ringW = 0.04 + random() * 0.04;
       m.ringPeak = 1.5 + random() * 2;
     }
+    if (random() < 0.12) polarRing(m, random);
   } else if (m.family === 'elliptical') {
+    if (random() < 0.06) polarRing(m, random);
     m.flattening = pick([0.35, 0.5, 0.65, 0.8, 0.95]) + random() * 0.05;
     m.ellipticalScale *= 0.7 + random() * 0.6;
     if (random() < 0.25) {
@@ -216,6 +235,21 @@ function vary(m, seed) {
     m.youngBias = random() * 0.25;
     m.knotRate = 1.5 + random() * 2;
   }
+}
+
+/** A ring of gas and young stars over the poles, captured from another galaxy. */
+function polarRing(m, random) {
+  m.polarR = 0.45 + random() * 0.3;
+  m.polarW = 0.05 + random() * 0.04;
+  const r = m.radiusPc * m.polarR;
+  m.polarPeak = (discSurface(m, r, 0) + spheroidCore(m, r, 0, 0)) * (2 + random() * 3);
+}
+
+/** Height of a warped disc's midplane at (x, y), in parsecs. */
+export function warpAt(m, x, y) {
+  if (!m.warp) return 0;
+  const t = Math.max(Math.hypot(x, y) / m.radiusPc - 0.55, 0);
+  return m.warp * m.radiusPc * t * t * 2.5 * Math.sin(Math.atan2(y, x) - m.phase);
 }
 
 /** Spiral arm modulation at disc position (x, y): 1 on an arm, low between. */
@@ -247,11 +281,36 @@ export function discSurface(m, x, y) {
     // Against the disc's own density at the ring's radius.
     d += m.discPeak * m.ringPeak * Math.exp(-t * t - (m.radiusPc * m.ringR) / m.discScale) * truncation;
   }
+  if (m.tidal) {
+    // Two open arms continuing past the truncation, fading by twice the radius.
+    const r = R / m.radiusPc;
+    if (r > 0.45) {
+      const phase = 2 * (Math.atan2(y, x) - Math.log(r + 0.2) / 0.32) + m.tidalPhase;
+      const ridge = Math.exp(-(1 - Math.cos(phase)) * 6);
+      const along = smooth01((r - 0.45) / 0.3) * (1 - smooth01((r - 1.3) / 0.75));
+      d += m.discPeak * m.tidal * 0.3 * Math.exp(-m.radiusPc * 0.6 / m.discScale) * ridge * along;
+    }
+  }
   return d;
+}
+
+function smooth01(t) {
+  const c = Math.min(1, Math.max(0, t));
+  return c * c * (3 - 2 * c);
 }
 
 /** Everything that is not the thin disc: bulge, bar, or the whole elliptical. */
 export function spheroid(m, x, y, z) {
+  const polar = m.polarPeak ? polarRingAt(m, x, y, z) : 0;
+  return polar + spheroidCore(m, x, y, z);
+}
+
+function polarRingAt(m, x, y, z) {
+  const t = (Math.hypot(x, z) / m.radiusPc - m.polarR) / m.polarW;
+  return m.polarPeak * Math.exp(-t * t) * sech2(y / Math.max(m.discHeight * 1.5, 40));
+}
+
+function spheroidCore(m, x, y, z) {
   if (m.family === 'elliptical') {
     const r = Math.hypot(x, y, z / m.flattening);
     let d = 40 * Math.exp(-7.67 * ((r / m.ellipticalScale) ** 0.25 - 1)) * 1e-4;
@@ -285,7 +344,7 @@ export function spheroid(m, x, y, z) {
 }
 
 export function densityAt(m, x, y, z) {
-  return discSurface(m, x, y) * sech2(z / m.discHeight) + spheroid(m, x, y, z);
+  return discSurface(m, x, y) * sech2((z - warpAt(m, x, y)) / m.discHeight) + spheroid(m, x, y, z);
 }
 
 /**

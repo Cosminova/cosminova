@@ -12,7 +12,7 @@ import {
  * cruise. These are camera-relative positions, one point per body.
  */
 
-const MAX = 96;
+const MAX = 256;
 
 const VERTEX = /* glsl */ `
   #include <common>
@@ -86,6 +86,29 @@ export function createDistantBodies() {
       colors[i * 3 + 1] = rgb[1] * boost;
       colors[i * 3 + 2] = rgb[2] * boost;
       sizes[i] = Math.min(16, Math.max(1.6, apparentPixels * 2.8 + 1.1));
+    },
+    /**
+     * A body drawn by the light it reflects rather than by its size: the
+     * apparent magnitude of a sphere of this radius and albedo, lit by `flux`
+     * (Earth's sunlight = 1), seen from `distanceKm`. A moon beside its planet
+     * is a bright spark, and a far planet of the same size a faint one.
+     */
+    addReflected(rel, rgb, { radiusKm, distanceKm, flux, albedo = 0.3, limit = 10.5 }) {
+      if (count >= MAX) return;
+      const reflected = Math.max(flux, 1e-12) * albedo * (radiusKm / Math.max(distanceKm, 1)) ** 2;
+      const magnitude = -2.5 * Math.log10(Math.max(reflected, 1e-30)) - 26.74;
+      const shown = Math.min(1, Math.max(0, (limit - magnitude) / 4));
+      if (shown <= 0.01) return;
+      const bright = Math.min(1, Math.max(0, (limit - 4 - magnitude) / 10));
+      const i = count++;
+      positions[i * 3] = rel.x;
+      positions[i * 3 + 1] = rel.y;
+      positions[i * 3 + 2] = rel.z;
+      const gain = shown * (2 + 26 * bright);
+      colors[i * 3] = rgb[0] * gain;
+      colors[i * 3 + 1] = rgb[1] * gain;
+      colors[i * 3 + 2] = rgb[2] * gain;
+      sizes[i] = 1.8 + 4.2 * bright;
     },
     end(pixelRatio) {
       material.uniforms.uPixelRatio.value = pixelRatio;

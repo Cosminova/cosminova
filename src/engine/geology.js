@@ -229,6 +229,47 @@ export function deriveGeology(spec) {
 }
 
 /**
+ * Geology for an invented world: the derivation above, then varied per planet,
+ * since two bodies of one size are no more alike than Venus and Earth. Some get
+ * a canyon system they had no business keeping, some a volcanic province, some
+ * are drowned in lava; the result is deterministic in `random`.
+ */
+export function inventGeology(spec, random) {
+  const radiusKm = spec.radiusKm ?? 0;
+  if (radiusKm < 350) return null;
+  const size = radiusKm / 6371;
+  const base = deriveGeology({ ...spec, tidalHeating: random() < 0.15 ? 0.4 + random() * 0.6 : 0 });
+  const vary = (v, lo, hi) => v * (lo + random() * (hi - lo));
+  const crustRelief = Math.max(base.crustRelief, Math.min(2.6 / Math.max(size, 0.15), 9) * 0.5) * (0.5 + random());
+  const geology = { crustRelief };
+  if (base.flood[0] > 0 || random() < 0.4) {
+    geology.flood = {
+      coverage: Math.min(0.9, vary(base.flood[0] || 0.25, 0.4, 1.5)),
+      fill: 0.4 + random() * 0.5,
+      wrinkle: 0.05 + random() * 0.1,
+      softness: 0.22 + random() * 0.1,
+    };
+  }
+  if (base.rift[0] > 0 || random() < 0.45) {
+    geology.rift = {
+      coverage: 0.06 + random() * 0.22,
+      frequency: 2 + random() * 3.5,
+      depth: Math.min((2 + random() * 6) / Math.max(size, 0.25), 14),
+      width: 0.03 + random() * 0.06,
+    };
+  }
+  if (base.volcano[0] > 0 || random() < 0.45) {
+    geology.volcano = {
+      coverage: 0.06 + random() * 0.35,
+      frequency: 3.5 + random() * 5,
+      height: Math.min((6 + random() * 18) / Math.max(size, 0.2), 30),
+      density: 0.25 + random() * 0.3,
+    };
+  }
+  return geology;
+}
+
+/**
  * Geology for a body: measured if we have been there, taken from the spec if the
  * generator supplied one, derived otherwise.
  */

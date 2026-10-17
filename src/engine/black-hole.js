@@ -518,7 +518,9 @@ export class BlackHole {
     if (!this.glare.visible) return;
     const au = distanceKm / AU_KM;
     const glare = pointGlare((this.luminositySol / Math.max(au * au, 1e-9)) * exposure);
-    this.glareMaterial.uniforms.uScale.value = (glare.pixels * distanceKm) / (2 * pixelsPerRadian);
+    // Twice a star's glare: an accreting hole is the brightest thing in any
+    // sky it is in, and from its own system's planets it should read so.
+    this.glareMaterial.uniforms.uScale.value = (glare.pixels * 2 * distanceKm) / (2 * pixelsPerRadian);
     this.glareMaterial.uniforms.uIntensity.value = glare.intensity * point;
   }
 }

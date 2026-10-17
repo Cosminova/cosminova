@@ -223,11 +223,23 @@ export function starLook(teff, radiusSol = 1, seed = 0) {
   const h = seed ? ((Math.imul(seed >>> 0, 2654435761) >>> 0) % 10007) / 10007 : 0.5;
   const activity = [0.15, 0.45, 0.8, 1, 1, 1.3, 1.8, 2.6][Math.floor(h * 8)];
   const grain = seed ? 0.7 + ((seed >>> 0) % 61) / 100 : 1;
+  // A second independent draw for the giants' shapes.
+  const h2 = seed ? ((Math.imul((seed >>> 0) ^ 0x5bd1e995, 2246822519) >>> 0) % 10009) / 10009 : 0.5;
+  // A red supergiant has a handful of convection cells the size of the Sun's
+  // orbit of the Earth, which push its limb in and out by a few per cent and
+  // break its disc into bright and dark blotches; it sheds dust as it does,
+  // in shells and arcs. Giants a little of the same; dwarfs none of it.
+  const huge = Math.min(1, Math.max(0, (gravity - 1.2) / 1.3));
+  const lumpy = huge * (0.025 + 0.07 * h2) * (0.4 + 0.6 * cool) + Math.min(1, Math.max(0, gravity - 0.8)) * 0.008;
+  const shell = huge > 0.3 && h2 > 0.25 ? (0.35 + 0.65 * h) * (0.5 + 0.5 * cool) : 0;
   return {
-    granScale: Math.max(6, (420 * grain) / 10 ** (Math.max(gravity, 0) * 0.85)),
-    granContrast: (0.15 + 0.31 * convective + 0.1 * cool * Math.min(1, Math.max(gravity, 0))) * (0.85 + 0.3 * h),
+    granScale: Math.max(huge > 0.3 ? 2.2 + 3 * h2 : 6, (420 * grain) / 10 ** (Math.max(gravity, 0) * 0.85)),
+    granContrast: (0.15 + 0.31 * convective + 0.1 * cool * Math.min(1, Math.max(gravity, 0))) * (0.85 + 0.3 * h) * (1 + huge * 0.9),
     spots: Math.min(0.85, (0.12 + 0.6 * cool) * convective * (gravity > 1.5 ? 0.4 : 1) * activity),
     limb: [0.3 + 0.45 * cool + 0.02 * convective, 0.12 + 0.11 * convective],
     seed: (seed % 997) / 97,
+    lumpy,
+    shell,
+    glow: 1 + huge * (1.2 + 1.5 * h2),
   };
 }
