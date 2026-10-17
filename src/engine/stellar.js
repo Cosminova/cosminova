@@ -218,10 +218,15 @@ export function starLook(teff, radiusSol = 1, seed = 0) {
   const gravity = Math.log10(Math.max(radiusSol, 0.05));
   const convective = 1 - Math.min(1, Math.max(0, (t - 6800) / 2200));
   const cool = Math.min(1, Math.max(0, (5200 - t) / 2200));
+  // Stars of one type still differ: some are near the quiet end of their
+  // cycle, some young and covered in spots. Seed 0 is the plain model.
+  const h = seed ? ((Math.imul(seed >>> 0, 2654435761) >>> 0) % 10007) / 10007 : 0.5;
+  const activity = [0.15, 0.45, 0.8, 1, 1, 1.3, 1.8, 2.6][Math.floor(h * 8)];
+  const grain = seed ? 0.7 + ((seed >>> 0) % 61) / 100 : 1;
   return {
-    granScale: Math.max(6, 420 / 10 ** (Math.max(gravity, 0) * 0.85)),
-    granContrast: 0.15 + 0.31 * convective + 0.1 * cool * Math.min(1, Math.max(gravity, 0)),
-    spots: Math.min(0.85, (0.12 + 0.6 * cool) * convective * (gravity > 1.5 ? 0.4 : 1)),
+    granScale: Math.max(6, (420 * grain) / 10 ** (Math.max(gravity, 0) * 0.85)),
+    granContrast: (0.15 + 0.31 * convective + 0.1 * cool * Math.min(1, Math.max(gravity, 0))) * (0.85 + 0.3 * h),
+    spots: Math.min(0.85, (0.12 + 0.6 * cool) * convective * (gravity > 1.5 ? 0.4 : 1) * activity),
     limb: [0.3 + 0.45 * cool + 0.02 * convective, 0.12 + 0.11 * convective],
     seed: (seed % 997) / 97,
   };

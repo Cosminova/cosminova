@@ -37,8 +37,12 @@ const TWO_POINTER_DEADZONE = 10;
  * that two by accident is not a journey.
  */
 const DOUBLE_TAP_ZOOM = -0.05;
-/** About a thousand gigaparsecs: far enough out that the view is all galaxies whatever the target. */
-const MAX_DISTANCE_KM = 3e25;
+/**
+ * About five gigaparsecs, the Hubble distance: out there the view is all
+ * superclusters whatever the target. Past it there was nothing more to see or
+ * click, and every gesture was spent climbing back.
+ */
+const MAX_DISTANCE_KM = 1.6e23;
 
 /**
  * Fold an angle back into (-pi, pi].
@@ -837,10 +841,7 @@ export class OrbitApproachControls {
     // Capped in kilometres as well as radii. In radii alone a probe a few
     // metres across ran out of zoom a megaparsec from home, before the
     // universe had even begun to show.
-    const ceiling = Math.max(
-      this.minDistanceRadii,
-      Math.max(this.maxDistanceRadii, MAX_DISTANCE_KM / Math.max(this.targetRadius, 1e-9)),
-    );
+    const ceiling = Math.max(this.minDistanceRadii, MAX_DISTANCE_KM / Math.max(this.targetRadius, 1e-9));
     this.distanceRadii = clamp(this.distanceRadii * Math.exp(amount), this.minDistanceRadii, ceiling);
   }
 

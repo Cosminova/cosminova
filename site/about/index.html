@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>About — Cosminova</title>
+    <meta
+      name="description"
+      content="Grant Su, who made Cosminova: why, what he designed, the tools and data it is built on, and the piano scores for its soundtrack."
+    />
+    <meta name="theme-color" content="#05070c" />
+
+    <link rel="icon" href="../assets/icon-16.png" sizes="16x16" type="image/png" />
+    <link rel="icon" href="../assets/icon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="../assets/icon-180.png" />
+    <link rel="stylesheet" href="../styles.css" />
+    <link rel="stylesheet" href="../doc.css" />
+  </head>
+
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="nav" id="nav">
+      <div class="nav__inner">
+        <a class="nav__brand" href="../" aria-label="Cosminova home">
+          <span class="nav__mark" aria-hidden="true"></span>
+          <span class="nav__name">COSMINOVA</span>
+        </a>
+        <nav class="nav__links" aria-label="Sections">
+          <a href="../#why">Why</a>
+          <a href="../#features">Engine</a>
+          <a href="../journal/">How I built it</a>
+          <a href="./">About</a>
+          <a class="nav__cta" href="../app/index.html">Launch demo</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="doc" id="main">
+      <p class="doc__kicker">About</p>
+      <h1>Grant Su</h1>
+      <p class="doc__lede">
+        I made Cosminova: a universe at true scale that runs in a browser, from a few metres above
+        a crater floor out to the superclusters.
+      </p>
+
+      <h2>Astronomy, and why this exists</h2>
+      <p>
+        Most of what I care about is up. I have spent a lot of time behind telescopes — learning
+        where to point, waiting for my eyes to adjust, finding a planet and then trying to hold
+        still long enough to see its moons. The strange thing about observing is how much it hides.
+        Everything you find arrives as a point or a smudge, all at the same apparent distance, and
+        the numbers that describe it are too big to mean anything on their own.
+      </p>
+      <p>
+        Cosminova is my attempt to close that gap. I wanted to stand under the real sky and then
+        keep going: lift off, watch Earth shrink to a dot, cross the empty kilometres to the planets
+        and the light-years to the next star, without the program ever cheating the distances to
+        keep things on screen. Building it taught me more astronomy than anything I had read,
+        because every time something looked wrong, the fix was a piece of physics I had only
+        memorised before — how light scatters through an atmosphere, how a star's colour follows
+        its temperature, how gravity bends the image of a black hole's disc.
+      </p>
+
+      <h2>The project at a glance</h2>
+      <dl class="facts">
+        <dt>Name</dt>
+        <dd>Grant Su</dd>
+        <dt>Role</dt>
+        <dd>Creator — concept, design direction, testing and release</dd>
+        <dt>Dates</dt>
+        <dd>26 August 2026 – present. First public build 5 September 2026.</dd>
+        <dt>Languages</dt>
+        <dd>JavaScript, GLSL shaders, HTML and CSS, Swift (the macOS and iOS shells)</dd>
+        <dt>Tools</dt>
+        <dd>
+          Three.js and WebGL2, Vite, Node.js, Electron (Windows build), Xcode, Puppeteer with
+          headless Chrome for automated tests, Git and GitHub Actions, and Cursor with AI coding
+          agents, which wrote most of the code from my direction
+        </dd>
+        <dt>What I designed</dt>
+        <dd>
+          <ul>
+            <li>
+              The concept and its one hard rule: a single continuous scene at true scale, with no
+              loading screens or compressed distances.
+            </li>
+            <li>
+              What you can do in it — orbit, fly, roam freely, stand on surfaces, ride spacecraft,
+              wind time, and click any point of light to go there.
+            </li>
+            <li>
+              The look: realistic rather than stylised, which meant deciding over and over what a
+              black hole, a sunset on Mars, or a galaxy seen from inside should look like and
+              judging the result against photographs.
+            </li>
+            <li>
+              The testing. I flew the app, found what was wrong — shaking orbits, black moons, a
+              duplicate Betelgeuse, labels cluttering open space — and decided what "fixed" had to
+              mean. The automated screenshot checks write those judgements down.
+            </li>
+            <li>The website, this journal, and the soundtrack's direction.</li>
+          </ul>
+        </dd>
+        <dt>Outside libraries</dt>
+        <dd>
+          Three.js (rendering), Vite (build), Electron (desktop), Puppeteer and sharp (tests and
+          screenshots), Verovio (engraving the sheet music below)
+        </dd>
+        <dt>Outside data</dt>
+        <dd>
+          <ul>
+            <li>ESA Gaia DR3 (1,165,298 stars) and the HYG database (Hipparcos, Yale, Gliese)</li>
+            <li>NASA Exoplanet Archive for real planetary systems</li>
+            <li>JPL planetary elements and JPL Horizons spacecraft trajectories</li>
+            <li>Solar System Scope body imagery (CC-BY 4.0), from NASA data</li>
+            <li>NASA SVS CGI Moon Kit, from Lunar Orbiter Laser Altimeter elevation</li>
+            <li>Cosmicflows-3, RC3 and HyperLEDA for galaxies</li>
+            <li>d3-celestial (Olaf Frohn) for constellations; Milky Way panorama by Serge Brunier (ESO)</li>
+            <li>Lunar theory from Meeus, <em>Astronomical Algorithms</em></li>
+          </ul>
+        </dd>
+      </dl>
+
+      <h2 id="music">Sheet music</h2>
+      <p>
+        The soundtrack is eight short piano pieces in the style of Minecraft's: a soft piano, a
+        broken-chord left hand under the pedal, a tune simple enough to hum, then silence. The app
+        synthesises them live from notes stored in its code, so these scores are engraved from
+        exactly the notes it plays. Each has chord symbols, form marks and the tempo it is played
+        at; the app also varies the tempo by where you are, which is not notated.
+      </p>
+      <figure>
+        <img src="../music/preview.jpg" alt="First page of the score for Hearth, for piano" width="700" height="906" loading="lazy" />
+        <figcaption>The first page of <em>Hearth</em>, as engraved.</figcaption>
+      </figure>
+      <p>
+        <a href="../music/cosminova-piano-book.pdf"><strong>All eight in one book (PDF, 12 pages)</strong></a>
+        — or each on its own, as a PDF to print or MusicXML to open in MuseScore, Finale or
+        Sibelius:
+      </p>
+      <ul class="scores">
+        <li><a href="../music/hearth.pdf">Hearth</a> · <a href="../music/hearth.musicxml">MusicXML</a><small>C major · 72 bpm · 4/4</small></li>
+        <li><a href="../music/lantern-moss.pdf">Lantern Moss</a> · <a href="../music/lantern-moss.musicxml">MusicXML</a><small>G major · 66 bpm · 3/4</small></li>
+        <li><a href="../music/small-hours.pdf">Small Hours</a> · <a href="../music/small-hours.musicxml">MusicXML</a><small>F major · 60 bpm · 4/4</small></li>
+        <li><a href="../music/drift.pdf">Drift</a> · <a href="../music/drift.musicxml">MusicXML</a><small>D major · 58 bpm · 4/4</small></li>
+        <li><a href="../music/far-shore.pdf">Far Shore</a> · <a href="../music/far-shore.musicxml">MusicXML</a><small>E♭ major · 64 bpm · 4/4</small></li>
+        <li><a href="../music/glass-garden.pdf">Glass Garden</a> · <a href="../music/glass-garden.musicxml">MusicXML</a><small>A Lydian · 62 bpm · 4/4</small></li>
+        <li><a href="../music/under-dark-water.pdf">Under Dark Water</a> · <a href="../music/under-dark-water.musicxml">MusicXML</a><small>A minor · 54 bpm · 4/4</small></li>
+        <li><a href="../music/pale-blue.pdf">Pale Blue</a> · <a href="../music/pale-blue.musicxml">MusicXML</a><small>B♭ major · 70 bpm · 4/4</small></li>
+      </ul>
+
+      <h2>Get in touch</h2>
+      <p>
+        Questions, bugs and ideas:
+        <a href="mailto:su.grant.x@gmail.com?subject=Cosminova">su.grant.x@gmail.com</a>.
+      </p>
+
+      <p class="doc__meta">Last updated 16 October 2026</p>
+    </main>
+
+    <footer class="foot">
+      <div class="foot__inner">
+        <span class="foot__name">COSMINOVA</span>
+        <nav class="foot__links" aria-label="More">
+          <a href="../journal/">How I built it</a>
+          <a href="../support/">Support</a>
+          <a href="../privacy/">Privacy</a>
+        </nav>
+        <span class="foot__note">Built with Three.js and WebGL2. No game engine.</span>
+      </div>
+    </footer>
+  </body>
+</html>

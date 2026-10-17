@@ -1,5 +1,6 @@
-import { Quaternion, Vector3 } from 'three';
+import { DataTexture, LinearFilter, Quaternion, RGBAFormat, SRGBColorSpace, Vector3 } from 'three';
 import { describePlanet, hashName } from './classify.js';
+import { createRings } from './rings.js';
 import { starLook, starTint, surfaceBrightness } from './stellar.js';
 import { proceduralCraft } from './craft-missions.js';
 import { Planet } from './planet.js';
@@ -201,6 +202,12 @@ export class ExoSystem {
       spec.orbitDays = entry.periodDays || 365 * Math.pow(spec.aAu, 1.5);
       const planet = new Planet(spec);
       const item = { spec, planet, angle0: hashAngle(entry.name), moons: [] };
+      // Giants out past where ice survives; a hot Jupiter's would have boiled off.
+      if (spec.banding && spec.aAu > 0.6 && hashAngle(`${entry.name}:rings`) < Math.PI * 0.9) {
+        item.rings = ringSystemFor(spec, hashName(`${entry.name}:rings`));
+        planet.spin.add(item.rings.mesh);
+        planet.setRings(item.rings.texture, item.rings.innerKm, item.rings.outerKm);
+      }
       this.planets.push(item);
       for (const moonEntry of entry.moons ?? []) {
         const moonDesc = describePlanet(
@@ -319,8 +326,59 @@ export class ExoSystem {
     for (const item of this.planets) {
       item.planet.group.removeFromParent();
       for (const moon of item.moons) moon.planet.group.removeFromParent();
+      if (item.rings) {
+        item.rings.mesh.geometry.dispose();
+        item.rings.material.dispose();
+        item.rings.texture.dispose();
+      }
     }
   }
+}
+
+/**
+ * An invented ring system: a radial profile of bands and gaps, icy, dusty or
+ * dark, from as narrow as Uranus's to wider than Saturn's.
+ */
+function ringSystemFor(spec, seed) {
+  let s = seed >>> 0 || 1;
+  const random = () => ((s = Math.imul(s ^ (s >>> 15), 0x2c1b3c6d) + 0x9e3779b9 >>> 0) / 4294967296);
+  const tint = [[232, 226, 214], [214, 186, 146], [150, 136, 122], [200, 205, 214]][Math.floor(random() * 4)];
+  const width = 512;
+  const data = new Uint8Array(width * 4);
+  const f1 = 18 + random() * 40;
+  const f2 = 60 + random() * 120;
+  const p1 = random() * 6.28;
+  const p2 = random() * 6.28;
+  const gaps = Array.from({ length: 1 + Math.floor(random() * 4) }, () => [0.15 + random() * 0.75, 0.006 + random() * 0.03]);
+  const narrow = random() < 0.25;
+  for (let i = 0; i < width; i++) {
+    const t = i / (width - 1);
+    let density = 0.55 + 0.25 * Math.sin(t * f1 + p1) + 0.15 * Math.sin(t * f2 + p2);
+    if (narrow) density *= Math.max(Math.sin(t * f1 * 0.5 + p1), 0) ** 6;
+    for (const [at, w] of gaps) density *= 1 - 0.92 * Math.exp(-(((t - at) / w) ** 2));
+    density *= Math.min(t / 0.06, 1) * Math.min((1 - t) / 0.1, 1);
+    const shade = 0.78 + 0.22 * Math.sin(t * f2 * 0.37 + p2);
+    data[i * 4] = tint[0] * shade;
+    data[i * 4 + 1] = tint[1] * shade;
+    data[i * 4 + 2] = tint[2] * shade;
+    data[i * 4 + 3] = Math.max(0, Math.min(1, density)) * 255;
+  }
+  const texture = new DataTexture(data, width, 1, RGBAFormat);
+  texture.colorSpace = SRGBColorSpace;
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearFilter;
+  texture.needsUpdate = true;
+  const innerKm = spec.radiusKm * (1.2 + random() * 0.3);
+  const outerKm = spec.radiusKm * (narrow ? 1.7 + random() * 0.4 : 2 + random() * 0.9);
+  const rings = createRings({
+    innerKm,
+    outerKm,
+    planetRadiusKm: spec.radiusKm,
+    texture,
+    opticalDepth: narrow ? 0.8 : 1.2 + random() * 1.5,
+    albedo: tint[0] > 200 ? 0.6 : 0.3,
+  });
+  return { ...rings, texture, innerKm, outerKm };
 }
 
 function hashAngle(name) {

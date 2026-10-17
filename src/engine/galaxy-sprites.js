@@ -264,8 +264,10 @@ function* build(slot, frame) {
     const discShare = disc / Math.max(rho, 1e-30);
     const ridge = armRidge(m, x, y);
     let young = m.family === 'irregular' ? 0.75 : discShare * (0.2 + ridge * 0.8);
+    if (m.ringPeak) young = Math.max(young, discShare * Math.exp(-(((Math.hypot(x, y) / R - m.ringR) / m.ringW) ** 2)));
+    young = Math.min(Math.max(young + (m.youngBias ?? 0) * discShare, 0), 1);
     if (elliptical) young = 0;
-    const knot = young > 0.55 && random() < 0.05;
+    const knot = young > 0.55 && random() < 0.05 * (m.knotRate ?? 1);
     let colour = mixColour(mixColour(OLD, DISC, discShare), YOUNG, Math.min(young * 1.2, 1));
     // Two scales: wide sprites that overlap into smooth light and carry most
     // of it, and smaller ones that keep the arms and knots sharp.

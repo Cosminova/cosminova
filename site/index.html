@@ -44,10 +44,13 @@
           <span class="nav__name">COSMINOVA</span>
         </a>
         <nav class="nav__links" aria-label="Sections">
+          <a href="#why">Why</a>
           <a href="#features">Engine</a>
           <a href="#gallery">Gallery</a>
-          <a href="#data">Data</a>
-          <a class="nav__cta" href="#download">Download</a>
+          <a href="journal/">How I built it</a>
+          <a href="about/">About</a>
+          <a href="#download">Download</a>
+          <a class="nav__cta" href="app/index.html">Launch demo</a>
         </nav>
       </div>
     </header>
@@ -105,45 +108,46 @@
             kilometres out to a few metres above a crater floor, without a cut or a scale change.
           </p>
 
+          <!-- The browser build first: nobody should have to install an
+               unsigned app to see what this is. -->
           <div class="actions" id="hero-actions">
-            <!-- Downloads, rather than scrolling to the section that downloads.
-                 A button that says "Download for Windows" and moves the page
-                 instead is a bait and switch. -->
-            <a
-              class="btn btn--primary"
-              href="https://github.com/Cosminova/info/releases/latest/download/Cosminova-Setup.exe"
-              data-download="windows"
-            >
+            <a class="btn btn--primary" href="app/index.html">
               <svg class="btn__icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  fill="currentColor"
-                  d="M3 5.6 10.2 4.6v6.7H3zM11.4 4.4 21 3v8.3h-9.6zM3 12.5h7.2v6.7L3 18.2zM11.4 12.5H21V21l-9.6-1.4z"
-                />
+                <path fill="currentColor" d="M8 5.5v13l10.5-6.5z" />
               </svg>
               <span class="btn__text">
-                <strong>Download for Windows</strong>
-                <small>64-bit installer · 228 MB</small>
+                <strong>Launch Interactive Demo</strong>
+                <small>Runs in your browser · no install</small>
               </span>
             </a>
 
-            <!-- Deliberately inert: the macOS build is not ready, and a button
-                 that looks live but does nothing is worse than one that says so. -->
-            <button class="btn btn--ghost" type="button" disabled aria-disabled="true">
+            <a class="btn btn--ghost" href="journal/">
               <svg class="btn__icon" viewBox="0 0 24 24" aria-hidden="true">
                 <path
                   fill="currentColor"
-                  d="M16.4 12.7c0-2.2 1.8-3.3 1.9-3.4-1-1.5-2.6-1.7-3.2-1.7-1.4-.1-2.6.8-3.3.8s-1.7-.8-2.9-.8c-1.5 0-2.9.9-3.6 2.2-1.6 2.7-.4 6.7 1.1 8.9.7 1.1 1.6 2.3 2.8 2.2 1.1 0 1.5-.7 2.9-.7s1.7.7 2.9.7c1.2 0 2-1.1 2.7-2.2.5-.8.8-1.6 1-2.4-.1 0-2.3-.9-2.3-3.6zM14.3 5.9c.6-.7 1-1.7.9-2.7-.9 0-2 .6-2.6 1.3-.6.6-1.1 1.6-.9 2.6 1 .1 2-.5 2.6-1.2z"
+                  d="M5 4h10l4 4v12H5zm2 2v12h10V9h-3V6zm2 6h6v1.6H9zm0 3h6v1.6H9z"
                 />
               </svg>
               <span class="btn__text">
-                <strong>macOS</strong>
-                <small>Coming soon</small>
+                <strong>How I Built It</strong>
+                <small>Mistakes, fixes and tests</small>
               </span>
-            </button>
+            </a>
+
+            <a
+              class="btn btn--quiet"
+              href="https://github.com/Cosminova/info/releases/latest/download/Cosminova-Setup.exe"
+              data-download="windows"
+            >
+              <span class="btn__text">
+                <strong>Download Desktop App</strong>
+                <small>Windows · 228 MB</small>
+              </span>
+            </a>
           </div>
 
           <p class="hero__alt">
-            Or <a href="app/index.html">open it in your browser</a> — no install, needs WebGL2.
+            The demo needs a browser with WebGL2 — any recent Chrome, Edge, Firefox or Safari.
           </p>
         </div>
 
@@ -164,6 +168,51 @@
         </div>
 
         <div class="hero__hint" aria-hidden="true"><span></span></div>
+      </section>
+
+      <!-- Why -->
+      <section class="why" id="why">
+        <div class="why__body reveal">
+          <p class="section__eyebrow">From the creator</p>
+          <h2 class="section__title">Why I built Cosminova</h2>
+          <p>
+            I spend a lot of nights at a telescope. You find Saturn, then a faint smudge that turns
+            out to be a galaxy, and through the eyepiece both look painted on the same dark
+            surface. Numbers like 1.4 billion kilometres or 2.5 million light-years are easy to
+            repeat and impossible to feel.
+          </p>
+          <p>
+            I wanted one place where those distances are real and continuous: stand on the ground
+            under the actual sky, then keep pulling back — past the Moon, the planets, the nearest
+            stars, the Milky Way — without a single cut. The emptiness between things is the part
+            I most wanted to see, so nothing here is moved closer to make it fit.
+          </p>
+          <p class="why__sign">— Grant Su</p>
+          <div class="why__links">
+            <a class="btn btn--ghost" href="about/"><span class="btn__text"><strong>About me</strong></span></a>
+            <a class="btn btn--ghost" href="journal/"><span class="btn__text"><strong>The build journal</strong></span></a>
+          </div>
+        </div>
+
+        <dl class="why__facts reveal">
+          <dt>Began</dt>
+          <dd>26 August 2026. The first public build went up on 5 September.</dd>
+          <dt>The first version</dt>
+          <dd>A realistic night sky you could zoom into: catalogue stars at their real positions, seen from Earth.</dd>
+          <dt>The question that bothered me</dt>
+          <dd>Could a single scene hold a crater floor and a galaxy cluster at true scale, with no cuts between them?</dd>
+          <dt>Why I kept going</dt>
+          <dd>
+            Every fix exposed something I did not understand yet — why the Martian sunset is blue,
+            why a double runs out of precision ten megaparsecs out, why Betelgeuse would swallow the
+            orbit of Mars.
+          </dd>
+          <dt>My part</dt>
+          <dd>
+            The idea, what it should do and look like, the real-scale rules, and testing every
+            change. The code was written with AI coding agents working from my direction.
+          </dd>
+        </dl>
       </section>
 
       <!-- Numbers -->
@@ -634,6 +683,9 @@
       <div class="foot__inner">
         <span class="foot__name">COSMINOVA</span>
         <nav class="foot__links" aria-label="More">
+          <a href="about/">About</a>
+          <a href="journal/">How I built it</a>
+          <a href="about/#music">Sheet music</a>
           <a href="support/">Support</a>
           <a href="privacy/">Privacy</a>
         </nav>

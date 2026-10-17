@@ -987,6 +987,7 @@ export class Cosmos {
       spin: 0.5 + (galaxy.seed % 50) / 100,
       inclinationDeg: 20 + (galaxy.seed % 60),
       jet: galaxy.morph < 0.6 && massSol > 5e8 ? 1 : 0,
+      ...holeLook(mulberry((galaxy.seed ^ 0x4b1d) >>> 0)),
       world: galaxy.center.clone(),
       generated: true,
     };
@@ -1030,6 +1031,7 @@ export class Cosmos {
             spin: 0.3 + random() * 0.69,
             inclinationDeg: 10 + random() * 70,
             jet: random() < 0.25 ? 1 : 0,
+            ...holeLook(random),
             world,
             generated: true,
           });
@@ -1038,6 +1040,21 @@ export class Cosmos {
     }
     return holes;
   }
+}
+
+/**
+ * How an invented hole is fed: a compact hot disc or a wide cool one, a
+ * bright quasar-like glare, or a starved one that is almost only its shadow
+ * and the stars it bends.
+ */
+function holeLook(random) {
+  const roll = random();
+  const brightness = roll < 0.12 ? 0.08 + random() * 0.1 : roll < 0.3 ? 1.5 + random() * 0.8 : 0.5 + random() * 0.9;
+  return {
+    brightness,
+    diskOuterRs: 9 + random() * 17,
+    tempScale: 0.45 + random() * 1.3,
+  };
 }
 
 function emptyCell(key) {

@@ -149,7 +149,73 @@ export function makeModel(galaxy) {
   // Small galaxies are thinner in surface density as well as smaller.
   model.discPeak *= Math.min(1, f ** 0.4);
   if (magellanicBar) model.barPeak = model.discPeak * 5;
+  if (galaxy.kind === 'generated' || galaxy.pinned) vary(model, galaxy.seed >>> 0);
   return model;
+}
+
+/**
+ * Within a family, invented galaxies differ the way real ones do: arm count
+ * and winding, grand-design or flocculent, big bulge or none, rings, lopsided
+ * discs, shells round ellipticals, starbursts and quenched red discs. Catalogue
+ * galaxies keep the plain model, which is fitted to what they are.
+ */
+function vary(m, seed) {
+  const random = mulberry((seed ^ 0x9e3779b9) >>> 0);
+  const pick = (list) => list[Math.floor(random() * list.length)];
+  m.youngBias = 0;
+  m.knotRate = 1;
+  if (m.family === 'spiral' || m.family === 'barred') {
+    m.arms = m.family === 'barred' ? pick([2, 2, 2, 3, 4]) : pick([2, 2, 3, 4, 4, 5, 6]);
+    m.pitch = Math.tan((7 + random() * 23) * Math.PI / 180);
+    // Flocculent below one, grand design above.
+    m.armContrast = pick([0.45, 0.7, 1, 1, 1.25, 1.45]);
+    const bulge = pick([0.35, 0.7, 1, 1.3, 1.8]);
+    m.bulgePeak *= bulge;
+    m.bulgeScale *= 0.7 + bulge * 0.35;
+    if (m.family === 'barred') m.barLength *= 0.6 + random() * 0.9;
+    m.lopsided = random() < 0.3 ? 0.15 + random() * 0.35 : 0;
+    const roll = random();
+    if (roll < 0.07) {
+      // A ring galaxy: the disc swept out into one bright ring round a core.
+      m.ringR = 0.55 + random() * 0.25;
+      m.ringW = 0.05 + random() * 0.04;
+      m.ringPeak = 25;
+      m.discPeak *= 0.15;
+      m.armContrast = 0;
+      m.barLength = 0;
+      m.knotRate = 3;
+    } else if (roll < 0.22) {
+      m.ringR = 0.3 + random() * 0.45;
+      m.ringW = 0.04 + random() * 0.05;
+      m.ringPeak = 1.5 + random() * 2;
+    }
+    const mood = random();
+    if (mood < 0.12) {
+      m.youngBias = 0.35;
+      m.knotRate = Math.max(m.knotRate, 3.5);
+    } else if (mood < 0.22) {
+      m.youngBias = -0.6;
+      m.knotRate = 0.15;
+    }
+  } else if (m.family === 'lenticular') {
+    m.bulgePeak *= pick([0.6, 1, 1.5]);
+    if (random() < 0.35) {
+      m.ringR = 0.35 + random() * 0.35;
+      m.ringW = 0.04 + random() * 0.04;
+      m.ringPeak = 1.5 + random() * 2;
+    }
+  } else if (m.family === 'elliptical') {
+    m.flattening = pick([0.35, 0.5, 0.65, 0.8, 0.95]) + random() * 0.05;
+    m.ellipticalScale *= 0.7 + random() * 0.6;
+    if (random() < 0.25) {
+      m.shells = 3 + Math.floor(random() * 3);
+      m.shellPhase = random() * Math.PI * 2;
+    }
+  } else if (m.family === 'irregular') {
+    m.clumpPc = 450 + random() * 1300;
+    m.youngBias = random() * 0.25;
+    m.knotRate = 1.5 + random() * 2;
+  }
 }
 
 /** Spiral arm modulation at disc position (x, y): 1 on an arm, low between. */
@@ -159,7 +225,8 @@ export function armFactor(m, x, y) {
   const theta = Math.atan2(y, x);
   const phase = m.arms * (theta - Math.log(R / 1000) / m.pitch) + m.phase;
   const ridge = Math.exp(-((1 - Math.cos(phase)) * 2.6));
-  return 0.42 + 1.75 * ridge;
+  const c = Math.min(m.armContrast, 1.6);
+  return Math.max(1 - 0.58 * c, 0.05) + 1.75 * c * ridge;
 }
 
 /** Disc surface term (without the vertical profile), per pc³ at the midplane. */
@@ -169,17 +236,37 @@ export function discSurface(m, x, y) {
   const truncation = 1 / (1 + Math.exp((R - m.radiusPc) / (m.radiusPc * 0.06)));
   let d = m.discPeak * Math.exp(-R / m.discScale) * truncation;
   if (m.family === 'irregular') {
-    const clump = valueNoise3(x / 900, y / 900, 0, m.seed) * valueNoise3(x / 2600, y / 2600, 1, m.seed);
+    const s = m.clumpPc ?? 900;
+    const clump = valueNoise3(x / s, y / s, 0, m.seed) * valueNoise3(x / (s * 2.9), y / (s * 2.9), 1, m.seed);
     d *= 0.2 + 3.2 * clump;
   }
-  return d * armFactor(m, x, y);
+  if (m.lopsided) d *= 1 + m.lopsided * Math.cos(Math.atan2(y, x) - m.phase * 1.7) * Math.min((2 * R) / m.radiusPc, 1);
+  d *= armFactor(m, x, y);
+  if (m.ringPeak) {
+    const t = (R / m.radiusPc - m.ringR) / m.ringW;
+    // Against the disc's own density at the ring's radius.
+    d += m.discPeak * m.ringPeak * Math.exp(-t * t - (m.radiusPc * m.ringR) / m.discScale) * truncation;
+  }
+  return d;
 }
 
 /** Everything that is not the thin disc: bulge, bar, or the whole elliptical. */
 export function spheroid(m, x, y, z) {
   if (m.family === 'elliptical') {
     const r = Math.hypot(x, y, z / m.flattening);
-    return 40 * Math.exp(-7.67 * ((r / m.ellipticalScale) ** 0.25 - 1)) * 1e-4;
+    let d = 40 * Math.exp(-7.67 * ((r / m.ellipticalScale) ** 0.25 - 1)) * 1e-4;
+    if (m.shells) {
+      // Faint arcs on alternating sides, left by a small galaxy it swallowed.
+      const theta = Math.atan2(y, x);
+      let shell = 0;
+      for (let k = 0; k < m.shells; k++) {
+        const rk = m.ellipticalScale * (1.2 + k * 0.9);
+        const t = (r - rk) / (rk * 0.05);
+        shell += Math.exp(-t * t) * Math.max(Math.cos(theta - m.shellPhase - k * Math.PI), 0);
+      }
+      d *= 1 + 2.5 * shell;
+    }
+    return d;
   }
   let d = 0;
   if (m.bulgePeak) {

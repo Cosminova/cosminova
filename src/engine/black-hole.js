@@ -111,11 +111,11 @@ const VOLUME_FRAGMENT = /* glsl */ `
   uniform float uBrightness;
   uniform float uCoreTempK;
   uniform float uRimTempK;
+  uniform float uDiskOut;  // rs, outer edge of the disk
 
   varying vec3 vLocal;
 
   const float R_IN = 2.6;      // rs, inner edge of the disk
-  const float R_OUT = 24.0;    // rs, outer edge
   const float BOUND = 55.0;    // rs, the mesh this is drawn on
 
   float hash(vec2 p) {
@@ -224,7 +224,7 @@ const VOLUME_FRAGMENT = /* glsl */ `
       if (p.y * next.y < 0.0) {
         vec3 hit = mix(p, next, p.y / (p.y - next.y));
         float rho = length(hit.xz);
-        if (rho > R_IN && rho < R_OUT) {
+        if (rho > R_IN && rho < uDiskOut) {
           float phi = atan(hit.z, hit.x);
           // Keplerian shear: the inner disk laps the outer one, which is what
           // stops the pattern from turning as a rigid wheel.
@@ -232,7 +232,7 @@ const VOLUME_FRAGMENT = /* glsl */ `
           float u = phi / 6.2831853 + uTime * omega;
           float bands = ringNoise(vec2(u * 26.0, rho * 1.7), 26.0) * 0.55
                       + ringNoise(vec2(u * 61.0, rho * 4.1), 61.0) * 0.3;
-          float dens = smoothstep(R_OUT, R_OUT * 0.45, rho)
+          float dens = smoothstep(uDiskOut, uDiskOut * 0.45, rho)
                      * smoothstep(R_IN, R_IN * 1.35, rho)
                      * (0.55 + 0.9 * bands);
 
@@ -351,7 +351,7 @@ export class BlackHole {
     // blue-white and off the end of what a screen can show, so what is kept
     // here is the ordering rather than the absolute value — the smallest holes
     // come out blue-white throughout, the largest keep an amber rim.
-    const hot = Math.pow(21 / Math.max(spec.massSol, 1), 0.25) ** 0.55;
+    const hot = Math.pow(21 / Math.max(spec.massSol, 1), 0.25) ** 0.55 * (spec.tempScale ?? 1);
     this.coreTempK = 9000 + 21000 * hot;
     this.rimTempK = 2400 + 5200 * hot;
     this.outerKm = this.rs * 55;
@@ -372,6 +372,7 @@ export class BlackHole {
         uBrightness: { value: spec.brightness ?? 1 },
         uCoreTempK: { value: this.coreTempK },
         uRimTempK: { value: this.rimTempK },
+        uDiskOut: { value: spec.diskOuterRs ?? 24 },
       },
       vertexShader: VOLUME_VERTEX,
       fragmentShader: VOLUME_FRAGMENT,

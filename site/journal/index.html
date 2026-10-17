@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>How I built it — Cosminova</title>
+    <meta
+      name="description"
+      content="The engineering journal behind Cosminova: early screenshots, mistakes, first attempts that failed, what fixed them, and the automated tests that keep them fixed."
+    />
+    <meta name="theme-color" content="#05070c" />
+
+    <link rel="icon" href="../assets/icon-16.png" sizes="16x16" type="image/png" />
+    <link rel="icon" href="../assets/icon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="../assets/icon-180.png" />
+    <link rel="stylesheet" href="../styles.css" />
+    <link rel="stylesheet" href="../doc.css" />
+  </head>
+
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+
+    <header class="nav" id="nav">
+      <div class="nav__inner">
+        <a class="nav__brand" href="../" aria-label="Cosminova home">
+          <span class="nav__mark" aria-hidden="true"></span>
+          <span class="nav__name">COSMINOVA</span>
+        </a>
+        <nav class="nav__links" aria-label="Sections">
+          <a href="../#why">Why</a>
+          <a href="../#features">Engine</a>
+          <a href="./">How I built it</a>
+          <a href="../about/">About</a>
+          <a class="nav__cta" href="../app/index.html">Launch demo</a>
+        </nav>
+      </div>
+    </header>
+
+    <main class="doc doc--wide" id="main">
+      <p class="doc__kicker">Engineering journal</p>
+      <h1>How I built Cosminova</h1>
+      <p class="doc__lede">
+        A finished screenshot hides every wrong turn behind it. This page is the wrong turns: what
+        the first versions looked like, what broke, what the first fix got wrong, and the tests
+        that now keep each fix in place. I designed and tested Cosminova and wrote the code with
+        AI coding agents, so most stories begin with something I noticed was wrong on screen and
+        end with a way to measure it.
+      </p>
+
+      <h2>Timeline</h2>
+      <ol class="timeline">
+        <li><time>26 Aug 2026</time>Started: a realistic night sky you could zoom into, seen from Earth.</li>
+        <li><time>5 Sep 2026</time>First public build — the true-scale renderer, a Windows app, this website, and a native macOS shell.</li>
+        <li><time>6 Sep 2026</time>iPhone and iPad builds; every star given a system; exoplanets given their own faces.</li>
+        <li><time>15 Oct 2026</time>The Windows crash at launch fixed. An infinite universe: Gaia's 1.1 million stars, generated galaxies, and star systems invented on demand.</li>
+        <li><time>16 Oct 2026</time>Precision far from home, click any point of light, a piano soundtrack, and varied galaxies, black holes and ringed giants.</li>
+      </ol>
+
+      <h2>Then and now</h2>
+      <div class="pair">
+        <figure>
+          <img src="../assets/journal/early-hero.jpg" alt="An early render: a hazy sun over a flat orange horizon, almost no detail" width="1440" height="1066" loading="lazy" />
+          <figcaption>5 September: the first landing-page picture. A sky gradient and a disc.</figcaption>
+        </figure>
+        <figure>
+          <img src="../assets/hero/earth-ground.jpg" alt="Standing on Earth at dusk under a sky computed by atmospheric scattering" width="1600" height="900" loading="lazy" />
+          <figcaption>Now: the same idea — standing on Earth — under a sky computed by scattering.</figcaption>
+        </figure>
+        <figure>
+          <img src="../assets/journal/early-betelgeuse.jpg" alt="Early Betelgeuse: a flat orange disc with a uniform speckled texture" width="1000" height="1250" loading="lazy" />
+          <figcaption>Early Betelgeuse: right size, flat surface.</figcaption>
+        </figure>
+        <figure>
+          <img src="../assets/journal/betelgeuse-now.jpg" alt="Betelgeuse now: convection cells, dark spots and a dimmer limb" width="1000" height="640" loading="lazy" />
+          <figcaption>Now: giant convection cells and starspots, scaled to a supergiant's gravity.</figcaption>
+        </figure>
+      </div>
+
+      <!-- Story 1 -->
+      <section class="story">
+        <h2>1. The 65,000-kilometre grid</h2>
+        <dl class="beats">
+          <dt>Problem</dt>
+          <dd>
+            Orbiting a star in a galaxy ten megaparsecs away, the star shook back and forth by six
+            pixels as the camera turned, and its moons were drawn about 66 pixels from where they
+            belonged.
+          </dd>
+          <dt>First attempt</dt>
+          <dd>
+            Positions were stored in kilometres from the Sun as 64-bit doubles — the standard
+            approach, and fine at home. Moving the world so the camera sat at the origin (a
+            "floating origin") steadied the near scene, but the shaking stayed.
+          </dd>
+          <dt>What I learned</dt>
+          <dd>
+            A double has 52 bits of fraction, so the gap between neighbouring numbers grows with
+            the number. At 3 × 10<sup>20</sup> km the gap is 65,536 km. Every position out there
+            snaps to that grid, and subtracting two snapped positions — camera minus planet — can
+            be wrong by a whole grid step, which is larger than most moons.
+          </dd>
+          <dt>Solution</dt>
+          <dd>
+            Never subtract two big numbers. Each planet and moon now stores its exact offset from
+            its own star, and anything drawn near the camera is worked out from those small
+            vectors. Camera flights were rebuilt the same way, as an offset from the target rather
+            than a position in space.
+          </dd>
+          <dt>Result</dt>
+          <dd>The shake fell from ±6 pixels to under ±0.5, and moons sit where their orbits put them.</dd>
+        </dl>
+        <figure>
+          <svg viewBox="0 0 900 230" role="img" aria-label="Diagram: positions snap to a grid 65,536 kilometres apart, wider than a 600 kilometre moon">
+            <rect width="900" height="230" fill="#05070c" />
+            <line x1="40" y1="150" x2="860" y2="150" stroke="#66707f" stroke-width="2" />
+            <g stroke="#97a1b2" stroke-width="2">
+              <line x1="80" y1="138" x2="80" y2="162" /><line x1="300" y1="138" x2="300" y2="162" />
+              <line x1="520" y1="138" x2="520" y2="162" /><line x1="740" y1="138" x2="740" y2="162" />
+            </g>
+            <text x="300" y="186" fill="#97a1b2" font-family="ui-monospace,Menlo,monospace" font-size="14" text-anchor="middle">a representable double</text>
+            <text x="410" y="212" fill="#66707f" font-family="ui-monospace,Menlo,monospace" font-size="13" text-anchor="middle">65,536 km apart at 10 Mpc</text>
+            <line x1="300" y1="200" x2="520" y2="200" stroke="#66707f" stroke-dasharray="4 4" />
+            <circle cx="430" cy="150" r="7" fill="#e8ecf3" />
+            <text x="430" y="122" fill="#e8ecf3" font-family="system-ui,sans-serif" font-size="15" text-anchor="middle">a 600 km moon</text>
+            <circle cx="415" cy="150" r="3" fill="#f0a860" />
+            <path d="M412 140 C 380 70, 320 70, 304 132" fill="none" stroke="#f0a860" stroke-width="2" marker-end="url(#a)" />
+            <text x="345" y="60" fill="#f0a860" font-family="system-ui,sans-serif" font-size="15" text-anchor="middle">the camera, rounded</text>
+            <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#f0a860" /></marker></defs>
+            <text x="40" y="36" fill="#97a1b2" font-family="system-ui,sans-serif" font-size="15">Ten megaparsecs out, every position snaps to the nearest tick.</text>
+          </svg>
+          <figcaption>Why the first approach could not work: the grid is coarser than the thing being drawn.</figcaption>
+        </figure>
+      </section>
+
+      <!-- Story 2 -->
+      <section class="story">
+        <h2>2. The black moons</h2>
+        <dl class="beats">
+          <dt>Problem</dt>
+          <dd>
+            In an invented system, clicking any moon of a giant planet left the screen completely
+            black. The camera had arrived inside the moon.
+          </dd>
+          <dt>First attempt</dt>
+          <dd>
+            The flight was rebuilt with the precision fix from the story above, and an automated
+            check confirmed the camera now stopped at 3.4 moon radii instead of 0.002. The
+            screenshots were still black: average brightness 0.6 out of 255.
+          </dd>
+          <dt>What I learned</dt>
+          <dd>
+            A fix can be right and still not be the fix. Reading the moon's shader inputs showed
+            its sunlight was 0.0000016 of normal. Exposure was set for the light at the moon's
+            orbit around its planet — a thousandth of an astronomical unit — instead of its
+            distance from the star, so the camera expected a million times too much light. And
+            moons behind their planet were approached from the night side.
+          </dd>
+          <dt>Solution</dt>
+          <dd>
+            Expose for the distance from the star, and when the usual framing would show mostly the
+            dark side, come in from the lit side instead.
+          </dd>
+          <dt>Result</dt>
+          <dd>Sunlight back to 1.0, average brightness 17–44, every moon tested arriving lit and outside.</dd>
+        </dl>
+        <div class="pair">
+          <figure>
+            <div class="blackout">mean brightness 0.6 / 255<br />camera at 0.002 moon radii</div>
+            <figcaption>Before: what the screenshot test measured.</figcaption>
+          </figure>
+          <figure>
+            <img src="../assets/journal/moon-after.jpg" alt="A banded icy moon lit from the side, a galaxy's dust lane behind it" width="1200" height="750" loading="lazy" />
+            <figcaption>After: the same moon, arrived at from the lit side.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <!-- Story 3 -->
+      <section class="story">
+        <h2>3. Click any point of light</h2>
+        <dl class="beats">
+          <dt>Problem</dt>
+          <dd>
+            Inside Andromeda the sky is full of stars, but they were only paint: clicking one did
+            nothing. I wanted every dot to be a place.
+          </dd>
+          <dt>First attempt</dt>
+          <dd>
+            Making invented stars clickable the same way as catalogue stars. The test click at the
+            edge of Andromeda picked "Hamburger eta" — a generated star that was not drawn
+            anywhere, but had no catalogue brightness, so nothing filtered it out.
+          </dd>
+          <dt>What I learned</dt>
+          <dd>
+            Picking has to agree exactly with drawing. If the click logic and the shader disagree
+            about which dots are visible, you get clicks on nothing and misses on things you can
+            plainly see.
+          </dd>
+          <dt>Solution</dt>
+          <dd>
+            On a click, every kind of point light is checked with the same brightness formula the
+            shaders use, and the brightest within 11 pixels wins. A generated star becomes a full
+            system — planets, moons, names — from a seed hashed from its position, so the same dot
+            is always the same place.
+          </dd>
+          <dt>Result</dt>
+          <dd>Clicking a star inside Andromeda flies you to it in about 40 milliseconds of work; a far smudge becomes a galaxy you can enter.</dd>
+        </dl>
+        <figure>
+          <img src="../assets/journal/andromeda-inside.jpg" alt="Inside Andromeda: a band of stars and dust, pink star-forming regions along it" width="1200" height="750" loading="lazy" />
+          <figcaption>Inside Andromeda. Every point here can be clicked and visited.</figcaption>
+        </figure>
+      </section>
+
+      <!-- Story 4 -->
+      <section class="story">
+        <h2>4. Tests that look at the screen</h2>
+        <dl class="beats">
+          <dt>Problem</dt>
+          <dd>
+            A universe has too many places to check by hand, and a fix in one place breaks another:
+            changing what the click function returned silently broke spacecraft selection.
+          </dd>
+          <dt>First attempt</dt>
+          <dd>
+            Flying around after every change. It was slow, and it missed exactly the things that
+            mattered, like a planet ten megaparsecs away that I had not happened to visit.
+          </dd>
+          <dt>What I learned</dt>
+          <dd>
+            Most of my judgements about the picture can be turned into numbers — brightness, how
+            far the camera ended up, how much a star moves between frames, whether a click landed
+            on what was under the cursor.
+          </dd>
+          <dt>Solution</dt>
+          <dd>
+            Over forty scripts drive the real app in headless Chrome. One visits every kind of
+            destination; one sweeps the camera through a full 360° and fails on any jump; one
+            scrolls from the ground to the surface of Vega without stopping; another flies to
+            every moon of a far system and measures where it arrived and how bright it is.
+          </dd>
+          <dt>Result</dt>
+          <dd>The spacecraft check caught the broken click the first time it ran, with the message "picked [object Object]".</dd>
+        </dl>
+        <figure>
+          <img src="../assets/journal/zoom-ladder.jpg" alt="A contact sheet of eighteen frames zooming from the ground to the surface of Vega" width="1080" height="450" loading="lazy" />
+          <figcaption>The zoom test's contact sheet: one unbroken scroll from the ground to Vega's surface.</figcaption>
+        </figure>
+      </section>
+
+      <h2>Other mistakes worth keeping</h2>
+      <ul>
+        <li><strong>Galaxies as white slabs.</strong> Small galaxies were drawn as flat bright rectangles until they became clouds of sprites with dust and star-forming knots.</li>
+        <li><strong>A Windows app that crashed at launch.</strong> The first installer opened to nothing on some machines.</li>
+        <li><strong>Two Betelgeuses.</strong> Two star catalogues both contained it, so it was drawn twice.</li>
+        <li><strong>Words all over space.</strong> Galaxy names floated in open space by default; now the sky is quiet until you ask.</li>
+        <li><strong>The App Store's sandbox.</strong> The Mac app had to be rebuilt to run sandboxed before Apple would review it.</li>
+      </ul>
+
+      <h2>Variety, the newest change</h2>
+      <p>
+        Invented galaxies used to share one model per type. They now vary the way real ones do:
+        two to six arms, tight or loose winding, grand-design or patchy, big bulge or none, rings
+        and ring galaxies, lopsided discs, shells around ellipticals, starbursts and quenched red
+        discs. Black holes vary in disc size, temperature and how well fed they are, and some
+        giant planets now have rings.
+      </p>
+      <figure>
+        <img src="../assets/journal/galaxy-variety.jpg" alt="Six generated galaxies: irregular clouds, a ringed spiral, and two- and three-armed spirals" width="1200" height="500" loading="lazy" />
+        <figcaption>Six generated neighbours, forty megaparsecs from home.</figcaption>
+      </figure>
+
+      <h2>The test suite</h2>
+      <p>A selection of the checks, and what each one fails on:</p>
+      <ul>
+        <li><strong>travel</strong> — every kind of destination is reachable and arrives lit.</li>
+        <li><strong>orbit-360</strong> — a full turn of the camera never jumps more than 5°.</li>
+        <li><strong>zoom</strong> — one scroll from the ground reaches a star's surface without stalling.</li>
+        <li><strong>roam</strong> — leaving free flight does not throw the camera across the system.</li>
+        <li><strong>craft</strong> — every spacecraft can be picked, and none leaves stale entries behind.</li>
+        <li><strong>system</strong> — a host star knows its galaxy and its planets.</li>
+        <li><strong>site</strong> — the download links point at a real file, and support and privacy are reachable.</li>
+      </ul>
+      <p>
+        Try it yourself: <a href="../app/index.html">launch the demo</a>, or read
+        <a href="../about/">about me</a>.
+      </p>
+
+      <p class="doc__meta">Last updated 16 October 2026</p>
+    </main>
+
+    <footer class="foot">
+      <div class="foot__inner">
+        <span class="foot__name">COSMINOVA</span>
+        <nav class="foot__links" aria-label="More">
+          <a href="../about/">About</a>
+          <a href="../support/">Support</a>
+          <a href="../privacy/">Privacy</a>
+        </nav>
+        <span class="foot__note">Built with Three.js and WebGL2. No game engine.</span>
+      </div>
+    </footer>
+  </body>
+</html>

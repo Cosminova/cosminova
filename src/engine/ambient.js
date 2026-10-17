@@ -42,7 +42,7 @@ const accidental = (a) => (a === '#' ? 1 : a === 'b' ? -1 : 0);
 const pcOf = (letter, acc) => (LETTER[letter] + accidental(acc) + 12) % 12;
 
 /** 'C4' is 60, as in MIDI. */
-function noteNumber(name) {
+export function noteNumber(name) {
   const m = /^([A-G])(#|b)?(-?\d)$/.exec(name);
   if (!m) throw new Error(`not a note: ${name}`);
   return (Number(m[3]) + 1) * 12 + LETTER[m[1]] + accidental(m[2]);
@@ -64,7 +64,7 @@ const QUALITIES = {
   m6: [0, 3, 7, 9],
 };
 
-function parseChord(name) {
+export function parseChord(name) {
   const m = /^([A-G])(#|b)?(maj9|maj7|madd9|m9|m7|m6|add9|sus2|sus4|m|6|7)?(?:\/([A-G])(#|b)?)?$/.exec(name);
   if (!m) throw new Error(`not a chord: ${name}`);
   const root = pcOf(m[1], m[2]);
@@ -80,7 +80,7 @@ function parseChord(name) {
 }
 
 /** 'E5:1.5 D5:.5 r:1 G4:1' — pitch and length in beats, 'r' for a rest. */
-function parseBar(text) {
+export function parseBar(text) {
   const notes = [];
   let beat = 0;
   for (const token of text.trim().split(/\s+/)) {
@@ -121,7 +121,7 @@ function parseScale(text) {
  * first section's chords with no tune over them, which is how almost every
  * piece in this style begins. `moods` are the places a piece belongs.
  */
-const PIECES = [
+export const PIECES = [
   {
     name: 'Hearth',
     scale: 'C major',
@@ -382,7 +382,7 @@ for (const piece of PIECES) {
  * spread their tones evenly over the next two octaves instead, so a bass that
  * is not the root does not end up a step below it.
  */
-function leftHand(chord, low) {
+export function leftHand(chord, low) {
   const bass = low + (((chord.bass - low) % 12) + 12) % 12;
   if (chord.bass === chord.root) {
     const third = chord.intervals.find((i) => i >= 2 && i <= 5) ?? 4;
@@ -402,7 +402,7 @@ function leftHand(chord, low) {
 const eighths = (order, accent) => order.map((i, k) => ({ i, b: k * 0.5, v: k === 0 ? accent : 0.33 }));
 
 /** Figures as indices into the voicing, beats and velocities. */
-const FIGURES = {
+export const FIGURES = {
   arp: {
     4: eighths([0, 1, 2, 3, 4, 3, 2, 1], 0.48),
     3: eighths([0, 1, 2, 3, 4, 3], 0.48),

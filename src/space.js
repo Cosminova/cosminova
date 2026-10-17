@@ -28,6 +28,7 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 
 import { loadSpaceData } from './data.js';
 import { createMilkyWay, ECLIPTIC_OBLIQUITY } from './milkyway.js';
@@ -1643,8 +1644,24 @@ const mainPass = new RenderPass(scene, camera);
 mainPass.clear = false;
 mainPass.clearDepth = true;
 const bloomPass = new UnrealBloomPass(new Vector2(1, 1), 0.22, 0.28, 0.97);
+// The target is half float, which overflows to infinity past 65504, and one
+// infinite or NaN pixel is enough for the bloom blur to smear into black
+// blocks that flicker from frame to frame. Clamped out before the blur sees it.
+const sanitizePass = new ShaderPass({
+  uniforms: { tDiffuse: { value: null } },
+  vertexShader: 'varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse;
+    varying vec2 vUv;
+    void main() {
+      vec4 c = texture2D(tDiffuse, vUv);
+      vec3 rgb = any(isnan(c.rgb)) ? vec3(0.0) : clamp(c.rgb, 0.0, 6e4);
+      gl_FragColor = vec4(rgb, isnan(c.a) ? 1.0 : c.a);
+    }`,
+});
 composer.addPass(skyPass);
 composer.addPass(mainPass);
+composer.addPass(sanitizePass);
 composer.addPass(bloomPass);
 composer.addPass(new OutputPass());
 const dither = createDitherPass();
@@ -2403,9 +2420,15 @@ function pickNamed(clientX, clientY) {
     }
   };
 
-  consider('sun', universe.get('sun').position, SUN.radiusKm);
+  // Only from where each is drawn. From a megaparsec out the whole solar
+  // system and every catalogue star sit on one pixel at the centre of the
+  // screen, and a click on the galaxy behind them took you to Voyager.
+  const fromSun = controls.worldPosition.distanceTo(universe.get('sun').position);
+  const nearHome = fromSun < PC_KM;
+  const inGalaxy = fromSun < 8000 * PC_KM;
+  if (fromSun < 1000 * PC_KM) consider('sun', universe.get('sun').position, SUN.radiusKm);
   for (const [key, planet] of planets) {
-    if (!planet.group.visible) continue;
+    if (!planet.group.visible || !nearHome) continue;
     consider(key, universe.get(key).position, planet.radius, 0, key);
   }
   if (exoSystem) {
@@ -2425,6 +2448,7 @@ function pickNamed(clientX, clientY) {
     // happened to project. What is drawn of them is a point, and pickDot has those.
     if (dest.kind === 'star' && (dest.generated || dest.system?.generated || dest.distPc === undefined) && dest.key !== state.target) continue;
     if (dest.kind === 'star' && dest.distPc > 30 && dest.mag > 1.5) continue;
+    if (dest.kind === 'star' && !inGalaxy && dest.key !== state.target) continue;
     const resolved = resolveWorld(dest.key);
     if (resolved) consider(dest.key, resolved.position, resolved.radius);
   }
@@ -2432,6 +2456,7 @@ function pickNamed(clientX, clientY) {
   // because a marker three pixels across has to be clickable at the size it is
   // drawn rather than at the size the spacecraft really is.
   for (const item of craftVisible) {
+    if (item.state.position.distanceTo(controls.worldPosition) > PC_KM) continue;
     consider(
       craftDestKey(item.state.key),
       item.state.position,
@@ -3135,6 +3160,14 @@ function frame(now) {
         viewLocal: tmpViewLocal,
         coneCos,
       });
+      if (item.rings) {
+        const u = item.rings.material.uniforms;
+        u.uSunDir.value.copy(tmpSunLocal);
+        u.uCameraLocal.value.copy(tmpCameraLocal);
+        u.uSunIntensity.value = item.planet.material.uniforms.uSunIntensity.value;
+        u.uPixelsPerRadian.value = pixelsPerRadian;
+        item.rings.mesh.visible = state.showRings;
+      }
     }
     for (const moon of exoSystem.moons) {
       if (!moon.world) continue;

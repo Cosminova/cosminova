@@ -1,5 +1,6 @@
 /*
- * The pages that are read rather than looked at: support and privacy.
+ * The pages that are read rather than looked at: support, privacy, about and
+ * the engineering journal.
  *
  * Loaded after styles.css, which supplies the palette, the header and the
  * footer. Only what a document needs is added here — a measure narrow enough
@@ -124,6 +125,177 @@
 
 .doc__card p:last-child {
   margin-bottom: 0;
+}
+
+/* ------------------------------------------- about and journal pages */
+
+.doc--wide {
+  width: min(920px, 100% - 3rem);
+}
+
+.doc figure {
+  margin: 1.6rem 0 2rem;
+}
+
+.doc figure img,
+.doc figure svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #000;
+}
+
+.doc figcaption {
+  font-size: 0.85rem;
+  color: var(--text-faint);
+  margin-top: 0.6rem;
+}
+
+/* Before and after, side by side, stacking on a phone. */
+.pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+}
+
+.pair figure {
+  margin: 0;
+}
+
+.pair img {
+  aspect-ratio: 16 / 10;
+  object-fit: cover;
+}
+
+.blackout {
+  display: grid;
+  place-items: center;
+  aspect-ratio: 16 / 10;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #010101;
+  color: var(--text-faint);
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.8rem;
+  text-align: center;
+  padding: 1rem;
+}
+
+/* The five beats of an engineering story, labelled down the left. */
+.story {
+  border-top: 1px solid var(--line);
+  padding-top: 2.2rem;
+  margin-top: 3rem;
+}
+
+.story h2 {
+  border: 0;
+  padding: 0;
+  margin: 0 0 1.2rem;
+}
+
+.beats {
+  display: grid;
+  grid-template-columns: 9.5rem 1fr;
+  gap: 0.2rem 1.4rem;
+  margin: 0;
+}
+
+.beats dt {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--amber);
+  padding-top: 0.28rem;
+}
+
+.beats dd {
+  margin: 0 0 1rem;
+  color: var(--text-dim);
+}
+
+/* Short facts: a label column and its answer. */
+.facts {
+  display: grid;
+  grid-template-columns: 11rem 1fr;
+  gap: 0.6rem 1.4rem;
+  margin: 0;
+}
+
+.facts dt {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.facts dd {
+  margin: 0;
+  color: var(--text-dim);
+}
+
+.timeline {
+  list-style: none;
+  padding: 0;
+  border-left: 1px solid var(--line-strong);
+}
+
+.timeline li {
+  position: relative;
+  padding-left: 1.4rem;
+  margin-bottom: 1rem;
+}
+
+.timeline li::before {
+  content: '';
+  position: absolute;
+  left: -4px;
+  top: 0.55em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+}
+
+.timeline time {
+  display: block;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.78rem;
+  color: var(--text-faint);
+}
+
+.scores {
+  list-style: none;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 0.6rem;
+}
+
+.scores li {
+  margin: 0;
+  background: var(--ink-1);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 0.8rem 1rem;
+}
+
+.scores small {
+  display: block;
+  color: var(--text-faint);
+}
+
+@media (max-width: 640px) {
+  .pair,
+  .beats,
+  .facts {
+    grid-template-columns: 1fr;
+  }
+
+  .beats dd {
+    margin-bottom: 1.2rem;
+  }
 }
 
 .doc__meta {
