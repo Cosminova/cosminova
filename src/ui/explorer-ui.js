@@ -719,11 +719,11 @@ export function createExplorerUI(config) {
             ? '<b>Drag</b> orbits the target. <b>Two fingers</b> dragged together look around instead. '
               + '<b>Pinch</b> zooms exponentially and keeps coasting, from metres above a crater out past the Local Group. '
               + '<b>Tap</b> selects and travels, <b>double tap</b> closes in further, and <b>press and hold</b> opens the object menu. '
-              + 'The <b>flight pad</b> at the bottom of the screen thrusts, climbs and dives, and <b>Boost</b> beside it goes four times faster.'
+              + 'The <b>flight pad</b> at the bottom of the screen thrusts, climbs and dives, and <b>Boost</b> beside it flies four times and walks ten times faster.'
             : '<b>Drag</b> orbits the target. <b>Right-drag</b> or <b>shift-drag</b> looks around. '
               + '<b>Scroll</b> zooms exponentially and keeps coasting, from metres above a crater out past the Local Group. '
               + '<b>Click</b> selects and travels; <b>right-click</b> opens the object menu. '
-              + '<b>W A S D</b> with <b>Q</b>/<b>E</b> flies and <b>shift</b> boosts. '
+              + '<b>W A S D</b> with <b>Q</b>/<b>E</b> flies and <b>shift</b> boosts. On foot, holding a key speeds up to sixty times walking pace. '
               + 'Hover any control to be told what it does.' }),
           el('div', { class: 'section-title', text: 'What you are looking at' }),
           el('p', { class: 'prose', text:

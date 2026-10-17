@@ -250,7 +250,10 @@ export function describe(resolved, context = {}) {
   if (resolved.kind === 'black-hole') {
     const s = resolved.spec;
     const rs = s.massSol * 2.953;
-    add('Class', s.massSol >= 1e10 ? 'Ultramassive black hole' : s.massSol > 1e5 ? 'Supermassive black hole' : 'Stellar-mass black hole', true);
+    const holeClass = s.massSol >= 1e10 ? 'Ultramassive black hole'
+      : s.massSol > 1e5 ? 'Supermassive black hole'
+      : s.massSol >= 150 ? 'Intermediate-mass black hole' : 'Stellar-mass black hole';
+    add('Class', holeClass, true);
     add('Mass', s.massSol >= 1e9
       ? `${num(s.massSol / 1e9, 2)} \u00d7 10\u2079 M\u2609`
       : s.massSol >= 1e6 ? `${num(s.massSol / 1e6, 2)} \u00d7 10\u2076 M\u2609` : `${num(s.massSol, 1)} M\u2609`);
@@ -270,7 +273,7 @@ export function describe(resolved, context = {}) {
     if (s.generated) add('Data', GENERATED, true);
     return {
       title: resolved.name,
-      className: s.massSol >= 1e10 ? 'Ultramassive black hole' : s.massSol > 1e5 ? 'Supermassive black hole' : 'Black hole',
+      className: holeClass,
       kind: 'black-hole',
       rows,
     };

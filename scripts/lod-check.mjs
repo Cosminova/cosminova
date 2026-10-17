@@ -140,7 +140,10 @@ await page.evaluate(() => {
   // would drown it: it alone puts about 2e-3 between two otherwise identical
   // frames, which is more than some of the differences being measured. Time is
   // frozen so that the only thing changing between two frames is the camera.
+  // Multisampling resolves edges by sub-pixel coverage, which differs between a
+  // patch and its collapsed children even when their surfaces coincide.
   window.cosminova.setBloom(false);
+  window.cosminova.setAntialias?.(false);
   window.cosminova.setPass('dither', false);
   window.cosminova.setUiVisible(false);
 });

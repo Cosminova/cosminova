@@ -1138,11 +1138,11 @@ export class OrbitApproachControls {
       (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) +
       (keys.has('KeyA') || keys.has('ArrowLeft') ? -1 : 0);
     const rise = (keys.has('KeyE') ? 1 : 0) + (keys.has('KeyQ') ? -1 : 0);
-    const run = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 5 : 1;
-    // Holding a direction builds up over a couple of seconds to several times
-    // the starting pace, so a short tap still places you precisely and a long
-    // press covers ground.
-    this._walkBoost = thrust || strafe ? Math.min((this._walkBoost ?? 0) + dt * 0.5, 1) : 0;
+    const run = keys.has('ShiftLeft') || keys.has('ShiftRight') ? 10 : 1;
+    // Holding a direction builds up over five seconds from a walk to sixty
+    // times that, so a short tap still places you precisely and a long press
+    // crosses a continent.
+    this._walkBoost = thrust || strafe ? Math.min((this._walkBoost ?? 0) + dt * 0.2, 1) : 0;
     this.walkVelocity = 0;
 
     const upL = this.walkLocal;
@@ -1155,8 +1155,8 @@ export class OrbitApproachControls {
     if (thrust || strafe) {
       const radiusKm = Math.max(this.targetRadius + this.walkGroundKm, 1e-6);
       // Faster with height, so a hover over the plains is not a crawl.
-      const boost = 1 + 4 * this._walkBoost * this._walkBoost;
-      const speed = this.walkSpeed * run * boost * Math.max(1, this.walkEyeKm / 0.0017) ** 0.6;
+      const boost = 1 + 59 * this._walkBoost ** 2.5;
+      const speed = this.walkSpeed * (this.flySpeed / 0.55) * run * boost * Math.max(1, this.walkEyeKm / 0.0017) ** 0.6;
       this.walkVelocity = speed;
       const step = (speed * dt) / radiusKm;
       const move = this._walkMove.copy(headingL).multiplyScalar(thrust).addScaledVector(rightL, strafe);
@@ -1242,7 +1242,7 @@ export class OrbitApproachControls {
     const boost = (keys.has('ShiftLeft') || keys.has('ShiftRight') ? 4 : 1) * (1 + 9 * this._flyHold * this._flyHold);
     const scale =
       this.mode === 'roam'
-        ? Math.max(this.roamReferenceKm, 0.02) * this.flySpeed
+        ? Math.max(this.roamReferenceKm, 0.3) * this.flySpeed
         : Math.max(this.altitudeKm, this.targetRadius * 0.002) * this.flySpeed;
     const wanted = this._flyWanted ??= new Vector3();
     wanted.set(0, 0, 0)

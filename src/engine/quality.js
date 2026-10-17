@@ -34,6 +34,9 @@ export const CEILING = 1;
 
 /** Resolution is quantised because changing it reallocates every render target. */
 const SCALE_STEPS = [0.5, 0.58, 0.67, 0.75, 0.85, 1];
+// Half resolution on a desktop monitor turns every ridge against the sky into
+// a staircase, which reads as broken; a phone's pixels are small enough to hide it.
+const SCALE_FLOOR = platform.deviceClass === 'desktop' ? 0.75 : 0.5;
 
 function stepFor(value) {
   let best = SCALE_STEPS[0];
@@ -52,7 +55,7 @@ function derive(level) {
     level: t,
     // Held at full resolution until detail has already been given up, because a
     // soft image reads as broken in a way that a smoother hillside does not.
-    renderScale: stepFor(0.5 + 0.5 * Math.max(0, (t - 0.35) / 0.65)),
+    renderScale: stepFor(SCALE_FLOOR + (1 - SCALE_FLOOR) * Math.max(0, (t - 0.35) / 0.65)),
     terrainDetail: 0.42 + 0.58 * t,
     patchScale: 0.45 + 0.55 * t,
     // The pebble field is a four-octave noise per fragment that is only visible

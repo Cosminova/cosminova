@@ -1012,29 +1012,40 @@ export class Cosmos {
         for (let k = ck - 1; k <= ck + 1; k++) {
           const seed = hashCell(g.seed ^ 0xb1ac, 30, i, j, k);
           const random = mulberry(seed);
-          const expected = (expectedInBox(g.model, i * s, j * s, k * s, s) / (s ** 3 * 0.1)) * 0.35;
-          if (random() > Math.min(expected, 0.9)) continue;
-          const x = (i + random()) * s;
-          const y = (j + random()) * s;
-          const zd = g.model.discHeight;
-          const z = Math.max(k * s, Math.min((k + 1) * s, gaussian(random) * zd * 0.6));
-          if (Math.hypot(x - local.x, y - local.y, z - local.z) > maxPc) continue;
-          const world = g.center.clone()
-            .addScaledVector(g.u, x * PC_KM)
-            .addScaledVector(g.w, y * PC_KM)
-            .addScaledVector(g.n, z * PC_KM);
-          const massSol = 5 + random() ** 2 * 30;
-          holes.push({
-            key: `bhx:${g.id}:${i}:${j}:${k}`,
-            name: `${properName(random)} X-${1 + Math.floor(random() * 9)}`,
-            massSol,
-            spin: 0.3 + random() * 0.69,
-            inclinationDeg: 10 + random() * 70,
-            jet: random() < 0.25 ? 1 : 0,
-            ...holeLook(random),
-            world,
-            generated: true,
-          });
+          const expected = (expectedInBox(g.model, i * s, j * s, k * s, s) / (s ** 3 * 0.1)) * 1.4;
+          // A real disc holds about a hundred million of them; this draws the
+          // ones bright or close enough to be worth a visit, up to four a cell.
+          for (let m = 0; m < 4; m++) {
+            if (random() > Math.min(expected / (1 + m), 0.95)) break;
+            const x = (i + random()) * s;
+            const y = (j + random()) * s;
+            const zd = g.model.discHeight;
+            const z = Math.max(k * s, Math.min((k + 1) * s, gaussian(random) * zd * 0.6));
+            // Drawn before the distance test so a hole's name and mass do not
+            // depend on where the camera happens to be.
+            const massSol = 5 + random() ** 2 * 30;
+            const name = `${properName(random)} X-${1 + Math.floor(random() * 9)}`;
+            const spin = 0.3 + random() * 0.69;
+            const inclinationDeg = 10 + random() * 70;
+            const jet = random() < 0.25 ? 1 : 0;
+            const look = holeLook(random);
+            if (Math.hypot(x - local.x, y - local.y, z - local.z) > maxPc) continue;
+            const world = g.center.clone()
+              .addScaledVector(g.u, x * PC_KM)
+              .addScaledVector(g.w, y * PC_KM)
+              .addScaledVector(g.n, z * PC_KM);
+            holes.push({
+              key: `bhx:${g.id}:${i}:${j}:${k}${m ? `:${m}` : ''}`,
+              name,
+              massSol,
+              spin,
+              inclinationDeg,
+              jet,
+              ...look,
+              world,
+              generated: true,
+            });
+          }
         }
       }
     }

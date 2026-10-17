@@ -161,6 +161,17 @@ renderer.toneMapping = ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1;
 renderer.autoClear = false;
 renderer.sortObjects = false;
+// three checks a target is readable before every async read by asking the
+// context, and in Chrome each of those questions is a synchronous round trip
+// to the GPU process. The answer cannot change, so it is asked once.
+for (const name of ['textureFormatReadable', 'textureTypeReadable']) {
+  const ask = renderer.capabilities[name].bind(renderer.capabilities);
+  const known = new Map();
+  renderer.capabilities[name] = (value) => {
+    if (!known.has(value)) known.set(value, ask(value));
+    return known.get(value);
+  };
+}
 // three asks for the context back when the GPU drops it (memory pressure, a
 // driver reset, a Mac waking from sleep) and rebuilds everything from the
 // data it still holds. If the GPU never hands it back, the canvas stays black
@@ -1729,10 +1740,14 @@ ui = createExplorerUI({
   },
 });
 
+// Everything is drawn into this rather than the canvas, so the canvas's own
+// antialias never touches the scene: without samples here every ridge line and
+// limb against the sky is a staircase.
 const composerTarget = new WebGLRenderTarget(1, 1, {
   type: HalfFloatType,
   depthBuffer: true,
   stencilBuffer: true,
+  samples: platform.antialias ? 4 : 0,
 });
 const composer = new EffectComposer(renderer, composerTarget);
 const skyPass = new RenderPass(skyScene, skyCamera);
@@ -2085,14 +2100,22 @@ function groundUnder(key, point, now) {
     || cameraGround.dir.angleTo(local) * surface.radius > Math.max(altitude * 0.05, 0.001);
   if (stale && surface.planet.group.visible) {
     const uniforms = surface.planet.material.uniforms;
-    let km = surface.planet.groundHeightsKm(renderer, groundProbeDirs)[0];
-    if (!Number.isFinite(km) || Math.abs(km) > surface.radius * 0.25) km = demGroundKm(key, local) ?? 0;
-    // The height function is the seabed; the water drawn over it is the floor.
-    if (uniforms.uHasOcean?.value > 0 || surface.planet.spec?.oceanFraction > 0) {
-      km = Math.max(km, uniforms.uSeaLevelKm?.value ?? 0);
-    }
-    cameraGround.key = key;
-    cameraGround.km = km;
+    const settle = (km) => {
+      if (!Number.isFinite(km) || Math.abs(km) > surface.radius * 0.25) km = demGroundKm(key, local) ?? 0;
+      // The height function is the seabed; the water drawn over it is the floor.
+      if (uniforms.uHasOcean?.value > 0 || surface.planet.spec?.oceanFraction > 0) {
+        km = Math.max(km, uniforms.uSeaLevelKm?.value ?? 0);
+      }
+      cameraGround.key = key;
+      cameraGround.km = km;
+    };
+    // Only the first answer on a body is worth a stall; after that the floor
+    // can be a frame or two behind while the read is in flight.
+    const pending = cameraGround.key === key && renderer.readRenderTargetPixelsAsync
+      ? surface.planet.groundHeightsKmAsync(renderer, groundProbeDirs)
+      : null;
+    if (pending) pending.then((h) => { if (cameraGround.key === key) settle(h[0]); }, () => {});
+    else if (cameraGround.key !== key) settle(surface.planet.groundHeightsKm(renderer, groundProbeDirs)[0]);
     cameraGround.at = now;
     cameraGround.dir.copy(local);
   }
@@ -2164,12 +2187,15 @@ function walkOnGround(surface, key, now) {
     walkProbe.km = null;
     walkProbe.at = -Infinity;
   }
-  // Wider at speed, to cover the ground crossed while a read is in flight.
-  const ahead = (controls.walkVelocity * 0.2) / surface.radius;
+  // Wider at speed, to cover the ground crossed while a read is in flight and
+  // until the next one: each read costs the frame a few milliseconds, so they
+  // come at a steady rate rather than once per frame of movement.
+  const ahead = (controls.walkVelocity * 0.3) / surface.radius;
   const spacing = Math.max(planet.finestSpacingRadians() * 2, ahead, 2e-7);
   const moved = walkProbe.dir.angleTo(up);
   const fresh = walkProbe.km === null;
-  if ((moved > spacing * 0.25 || now - walkProbe.at > 200) && planet.group.visible) {
+  const due = moved > spacing * 0.25 ? now - walkProbe.at > 90 : now - walkProbe.at > 400;
+  if ((fresh || due) && planet.group.visible) {
     walkRight.crossVectors(controls.walkHeadingLocal, up).normalize();
     let n = 0;
     for (let i = -1; i <= 1; i++) {
@@ -4129,6 +4155,15 @@ window.cosminova = {
   setBloom(enabled) {
     state.bloom = enabled;
     bloomPass.enabled = enabled;
+  },
+  /** For checks that compare renders of the same surface tessellated differently. */
+  setAntialias(enabled) {
+    const samples = enabled && platform.antialias ? 4 : 0;
+    for (const target of [composer.renderTarget1, composer.renderTarget2]) {
+      if (target.samples === samples) continue;
+      target.samples = samples;
+      target.dispose();
+    }
   },
   /** Screenshot scripts hide the interface rather than crop around it. */
   setUiVisible(visible) {

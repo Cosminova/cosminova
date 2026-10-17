@@ -157,12 +157,38 @@ const PLANETARY_PALETTES = [
 ];
 const PN_SHAPES = { bipolar: 1, elliptical: 0.35, irregular: 0.15, round: 0, stellar: 0 };
 
+/**
+ * Surface brightness relative to a bright H II region. The great nearby shells
+ * span tens of degrees of our sky and are so faint that it took long-exposure
+ * plates to find them at all; drawn at Orion's brightness they would bury the
+ * view from Earth.
+ */
+const FAINT = {
+  gum: 0.06,
+  'barnard-loop': 0.12,
+  'vela-snr': 0.22,
+  simeis147: 0.25,
+  w50: 0.3,
+  ic2118: 0.3,
+  rcw86: 0.4,
+  veil: 0.45,
+  'puppis-a': 0.45,
+  ngc1499: 0.45,
+  ic1396: 0.5,
+  ic2177: 0.5,
+  ngc7000: 0.55,
+};
+
 function dressNebula(entry) {
   const rnd = random(hashKey(entry.key));
   const pick = (list) => list[Math.floor(rnd() * list.length) % list.length];
   if (entry.type === 'planetary') {
     return {
       ...entry,
+      // A few catalogue sizes are the faint outer halo, or a bad distance
+      // turning arcseconds into tens of parsecs; no planetary is that big.
+      radiusPc: Math.min(entry.radiusPc, 1),
+      faint: 0.8,
       colours: pick(PLANETARY_PALETTES),
       bipolar: PN_SHAPES[entry.shape] ?? 0,
       cavity: rnd(),
@@ -171,6 +197,9 @@ function dressNebula(entry) {
   }
   return {
     ...entry,
+    // WISE measures the warm-dust bubble, which reaches well past the glowing gas.
+    radiusPc: entry.radiusPc * 0.7,
+    faint: 0.5,
     colours: pick(EMISSION_PALETTES),
     cavity: 0.15 + rnd() * 0.8,
     shape: rnd() < 0.35 ? 1 : 0,
@@ -528,7 +557,7 @@ const NEBULA_FRAGMENT = /* glsl */ `
     colour *= 1.35 / (1.0 + 0.6 * peak);
     // A cloud drawn faint because it is small on the sky is dimmed as a
     // whole, its dust included; only a dark nebula is meant to be a hole.
-    float cover = uType > 4.5 ? 1.0 : clamp(uBright * 2.0, 0.25, 1.0);
+    float cover = uType > 4.5 ? 1.0 : clamp(uBright * 2.0, 0.03, 1.0);
     gl_FragColor = vec4(colour, (1.0 - transmit) * cover);
     #include <logdepthbuf_fragment>
   }
@@ -645,13 +674,18 @@ class Nebula extends Shown {
     // A cloud is the same surface brightness from any distance, and a real
     // one is faint: Orion from Earth is a smudge. Up close the eye adapts to
     // it, so the drawn brightness follows the apparent size, not the distance
-    // — and from a planet a few of its radii off, it fills the sky.
-    const near = Math.min(1, Math.max(0, (this.apparent - 0.004) / 0.15));
+    // — and from a planet a couple of its radii off, it fills the sky. Further
+    // out than that it stays a faint smudge however wide it spans.
+    const near = Math.min(1, Math.max(0, (this.apparent - 0.05) / 0.55));
+    const faint = this.spec.faint ?? FAINT[this.spec.key] ?? 1;
     // From inside, the whole sky is cloud, and at the brightness it has
     // seen whole from outside it would be a white-out.
-    u.uBright.value = (0.05 + 0.95 * near * near * (3 - 2 * near)) * (1 - 0.5 * Math.sqrt(this.inside));
-    // A few pixels across needs nothing like the full march.
-    u.uSteps.value = this.apparent * pixelsPerRadian < 60 ? Math.min(steps, 24) : steps;
+    const bright = (0.04 + 0.96 * near * near * (3 - 2 * near)) * (1 - 0.5 * Math.sqrt(this.inside));
+    u.uBright.value = bright * (faint + (1 - faint) * near);
+    // A few pixels across, or too faint to show detail, needs nothing like
+    // the full march; a dim cloud across half the sky is the costliest thing
+    // on screen otherwise.
+    u.uSteps.value = this.apparent * pixelsPerRadian < 60 || u.uBright.value < 0.15 ? Math.min(steps, 16) : steps;
   }
 }
 

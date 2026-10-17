@@ -2325,9 +2325,11 @@ export class Planet {
     // spends the budget on a million vertices of terrain nobody can see move.
     this.sphere.pixelsPerQuad = altitudeRadii < 0.0005 ? Math.max(5, quad * 0.75)
       : altitudeRadii < 0.05 ? Math.max(3.5, quad * 0.55) : quad;
+    // Near the ground the frame is paid for in fragments, not patches, and a
+    // budget cut there is what leaves the far side of the view unrefined.
     this.sphere.maxPatches = Math.max(
       256,
-      Math.round((this.spec.maxPatches ?? DEFAULT_MAX_PATCHES) * patchScale),
+      Math.round((this.spec.maxPatches ?? DEFAULT_MAX_PATCHES) * (altitudeRadii < 0.05 ? Math.max(patchScale, 0.9) : patchScale)),
     );
 
     // How wide one screen pixel is on the surface at the sub-camera point. The
