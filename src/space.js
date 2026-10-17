@@ -1040,19 +1040,32 @@ function onCone(axis, angleRad, toward, out) {
  * line to it that it clears the target's limb and sits beside it in frame.
  */
 function arrivalDirection(resolved, distanceRadii, out) {
-  const light = lightSourceFor(resolved);
-  const toLight = light ? tmpArrivalB.subVectors(light, resolved.position) : null;
+  // In a visited system, from each body's exact offset from its star: far
+  // from home the absolute positions are too coarse to say which way a moon's
+  // planet lies, and arriving on the wrong side left it a black disc.
+  const local = exoSystem?.localOf(resolved.spec?.key ?? resolved.key);
+  const parent = resolved.spec?.parent;
+  const parentLocal = local && parent && parent !== exoSystem.key ? exoSystem.localOf(parent) : null;
+  const light = local ? null : lightSourceFor(resolved);
+  const toLight = local ? tmpArrivalB.copy(local).negate()
+    : light ? tmpArrivalB.subVectors(light, resolved.position) : null;
   if (toLight && toLight.lengthSq() > 1e-12) toLight.normalize();
 
-  const primary = primaryPositionOf(resolved);
+  const primary = local ? parentLocal : primaryPositionOf(resolved);
   if (primary) {
-    const outboard = out.subVectors(resolved.position, primary);
+    const outboard = out.subVectors(local ?? resolved.position, primary);
     if (outboard.lengthSq() < 1e-12) return null;
     outboard.normalize();
     // Enough to clear the target's own disc, plus a margin, and never so far
     // round that the primary leaves the frame.
     const limb = Math.asin(clamp(1 / Math.max(distanceRadii, 1.05), 0, 1));
-    return onCone(outboard, clamp(limb + 0.16, 0.2, 0.52), toLight, out);
+    const axis = tmpArrivalC.copy(outboard);
+    onCone(axis, clamp(limb + 0.16, 0.2, 0.52), toLight, out);
+    if (!toLight || out.dot(toLight) > -0.05) return out;
+    // Round the far side of its planet, where that framing is the moon's
+    // night: a black disc in front of a black planet. Come in on the lit
+    // side instead, leaning toward the planet.
+    return onCone(toLight, 0.75, axis, out);
   }
 
   if (!toLight) return null;
@@ -1137,7 +1150,10 @@ function selectTarget(key, { fly = false, duration = 3200 } = {}) {
     } else if (resolved.kind === 'body') {
       arriveFrom = arrivalDirection(resolved, distanceRadii, tmpVector);
     }
-    controls.flyTo(key, { distanceRadii, duration, arriveFrom });
+    // From a planet to its own moon the camera's offset from the moon is
+    // known exactly; from two absolute positions far from home it is not.
+    const startOffset = cameraFrame.relative(tmpArrivalC, key)?.negate() ?? undefined;
+    controls.flyTo(key, { distanceRadii, duration, arriveFrom, startOffset });
   } else {
     controls.setTarget(key, resolved.position, resolved.radius, {
       keepCamera: false,
@@ -1820,7 +1836,10 @@ function exoReferenceFlux(system, targetKey, hostLum, cameraWorld) {
     }
   }
   if (!chosen) return 1;
-  return exoFlux(hostLum, chosen.spec.orbitKm / 149597870.7);
+  // A moon's own orbit is round its planet, a thousandth of an au: exposing
+  // for that much sunlight drew every moon black.
+  const fromStarKm = system.moons.includes(chosen) ? chosen.local?.length() : chosen.spec.orbitKm;
+  return exoFlux(hostLum, (fromStarKm || chosen.spec.orbitKm) / 149597870.7);
 }
 
 /**

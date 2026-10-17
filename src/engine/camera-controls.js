@@ -203,6 +203,7 @@ export class OrbitApproachControls {
     this.bodyFrame = null;
 
     this.worldPosition = new Vector3();
+    this._flightOffset = new Vector3();
     /**
      * The camera as an exact offset from the thing it was built relative to:
      * the key of that thing, and the vector from it to the camera.
@@ -885,9 +886,17 @@ export class OrbitApproachControls {
     this.yaw = Math.atan2(v.x, v.z);
   }
 
-  /** Smooth approach. Distance interpolates geometrically. */
-  flyTo(key, { distanceRadii = 3.2, duration = 2800, worldFrom, targetFrom, radiusFrom, arriveFrom } = {}) {
+  /**
+   * Smooth approach. Distance interpolates geometrically.
+   *
+   * `startOffset` is the camera's offset from the new target where the caller
+   * knows it exactly, as it does between two bodies of one system; otherwise
+   * it is the difference of the two positions.
+   */
+  flyTo(key, { distanceRadii = 3.2, duration = 2800, worldFrom, targetFrom, radiusFrom, arriveFrom, startOffset } = {}) {
+    const from = worldFrom ?? this.worldPosition;
     this._flight = {
+      startOffset: startOffset?.clone() ?? new Vector3().subVectors(from, targetFrom ?? this.targetPosition),
       key,
       fromDistance: this.distanceRadii,
       toDistance: distanceRadii,
@@ -1083,20 +1092,25 @@ export class OrbitApproachControls {
       this.lookYaw = flight.fromLookYaw * (1 - ease);
       this.lookPitch = flight.fromLookPitch * (1 - ease);
       this.yaw = flight.fromYaw + (this.yaw - flight.fromYaw) * 0;
-      const fromD = Math.max(flight.worldFrom.distanceTo(flight.targetFrom), 1e-6);
+      // The whole approach is an offset from the target, which carries the
+      // camera along as it moves: the start offset fading out and the arrival
+      // one fading in. Never the difference of two absolute positions, because
+      // ten megaparsecs out a double is 65,000 km coarse, and that difference
+      // put the camera at the centre of any moon smaller than that — inside
+      // it, looking at nothing.
+      const start = flight.startOffset;
+      const fromD = Math.max(start.length(), 1e-6);
       const toD = flight.toDistance * targetRadius;
       const distance = fromD * Math.pow(toD / fromD, ease);
-      const dir = this._offset.subVectors(flight.worldFrom, flight.targetFrom);
+      const dir = this._offset.copy(start);
       if (dir.lengthSq() < 1e-12) dir.set(0, 0.15, 1);
       dir.normalize();
       if (flight.arriveFrom && flight.arriveFrom.lengthSq() > 1e-12) {
         this._lookAt.copy(flight.arriveFrom).normalize();
         dir.lerp(this._lookAt, ease).normalize();
       }
-      const arrived = this._lookAt.copy(targetPosition).addScaledVector(dir, distance);
-      const mixedTarget = this._right.copy(flight.targetFrom).lerp(targetPosition, ease);
-      this.worldPosition.copy(flight.worldFrom).lerp(arrived, ease);
-      const offset = this._offset.subVectors(this.worldPosition, mixedTarget);
+      const offset = this._flightOffset.copy(start).multiplyScalar(1 - ease).addScaledVector(dir, distance * ease);
+      this.worldPosition.copy(targetPosition).add(offset);
       const dist = offset.length() || 1;
       this.distanceRadii = dist / Math.max(targetRadius, 1e-6);
       this._anglesFrom(offset.x, offset.y, offset.z);
@@ -1235,9 +1249,10 @@ export class OrbitApproachControls {
         this.originOffset.copy(this._offset).multiplyScalar(distanceKm);
         this.worldPosition.copy(this.targetPosition).add(this.originOffset);
       } else {
-        // A flight interpolates between two absolute positions, so there is no
-        // exact offset to hand out; it is also nowhere near anything yet.
-        this.originKey = null;
+        // Held as an offset from the target the whole way, so the frames
+        // closing in on something small are as exact as the orbit after.
+        this.originKey = this.targetKey;
+        this.originOffset.copy(this._flightOffset);
       }
       forward = this._forward.copy(this._offset).negate();
     }
