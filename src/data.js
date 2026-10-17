@@ -70,15 +70,18 @@ function pickPanoramaTier(maxTextureSize, tiers) {
  * skipping them takes a megabyte off the first frame.
  */
 export async function loadSpaceData({ maxTextureSize = 4096 } = {}) {
-  const [catalog, milkyWayMeta, galaxies, exoplanets, starNames] = await Promise.all([
+  const [catalog, milkyWayMeta, galaxies, exoplanets, starNames, deepSky] = await Promise.all([
     loadStarCatalog(),
     fetchJson('textures/milkyway.meta.json'),
     fetchJson('data/galaxies.json'),
     fetchJson('data/exoplanets.json'),
     fetchJson('data/starnames.json'),
+    // Clusters and nebulae from the published catalogues; the scene still has
+    // its own hand-made ones if this is missing.
+    fetchJson('data/deep-sky.json').catch(() => ({ clusters: [], nebulae: [] })),
   ]);
   const milkyWayTexture = await loadTexture(pickPanoramaTier(maxTextureSize, milkyWayMeta.tiers));
-  return { catalog, milkyWayTexture, milkyWayMeta, galaxies, exoplanets, starNames };
+  return { catalog, milkyWayTexture, milkyWayMeta, galaxies, exoplanets, starNames, deepSky };
 }
 
 export async function loadSkyData({ maxTextureSize = 4096, onProgress = () => {} } = {}) {

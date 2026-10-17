@@ -38,11 +38,12 @@ const TWO_POINTER_DEADZONE = 10;
  */
 const DOUBLE_TAP_ZOOM = -0.05;
 /**
- * About five gigaparsecs, the Hubble distance: out there the view is all
- * superclusters whatever the target. Past it there was nothing more to see or
- * click, and every gesture was spent climbing back.
+ * About eleven gigaparsecs, just past the most distant galaxy in the
+ * catalogue: out there the view is all superclusters whatever the target. Past
+ * it there was nothing more to see or click, and every gesture was spent
+ * climbing back.
  */
-const MAX_DISTANCE_KM = 1.6e23;
+const MAX_DISTANCE_KM = 3.5e23;
 
 /**
  * Fold an angle back into (-pi, pi].

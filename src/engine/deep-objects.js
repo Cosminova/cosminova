@@ -40,29 +40,142 @@ const HA = [1.0, 0.16, 0.24];
 const OIII = [0.12, 0.85, 0.78];
 const SII = [1.0, 0.42, 0.18];
 const BLUE = [0.35, 0.55, 1.0];
+const ORANGE = [1.0, 0.46, 0.16];
+const GOLD = [1.0, 0.78, 0.42];
+const CREAM = [1.0, 0.9, 0.7];
+const VIOLET = [0.62, 0.36, 1.0];
+const GREEN = [0.35, 1.0, 0.55];
+const PINK = [1.0, 0.36, 0.55];
 
+/*
+ * The famous ones, by hand.
+ *
+ * `shape` picks a structure within the type: for emission and dark nebulae 1
+ * means pillars, columns of dust eaten away by the starlight (the Eagle's, the
+ * Horsehead's). For planetary nebulae `bipolar` is how far the shell is drawn
+ * into two lobes and `cavity` how fat they are. `look` draws one type with
+ * another's shader where the physics is close enough — a Wolf–Rayet bubble is
+ * a shell like a supernova's — and `label` names what it is.
+ */
 export const NEBULAE = [
   { key: 'm42', name: 'Orion Nebula', type: 'emission', ra: 83.822, dec: -5.391, distPc: 412, radiusPc: 4, colours: [HA, OIII, BLUE], cavity: 0.6 },
-  { key: 'm16', name: 'Eagle Nebula', type: 'emission', ra: 274.7, dec: -13.807, distPc: 1740, radiusPc: 9, colours: [HA, [0.95, 0.75, 0.35], SII], cavity: 0.4 },
+  { key: 'm16', name: 'Eagle Nebula', type: 'emission', ra: 274.7, dec: -13.807, distPc: 1740, radiusPc: 9, colours: [ORANGE, GOLD, SII], cavity: 0.4, shape: 1 },
+  { key: 'm17', name: 'Omega Nebula', type: 'emission', ra: 275.196, dec: -16.171, distPc: 1700, radiusPc: 7, colours: [ORANGE, CREAM, HA], cavity: 0.3 },
   { key: 'm8', name: 'Lagoon Nebula', type: 'emission', ra: 270.904, dec: -24.387, distPc: 1250, radiusPc: 12, colours: [HA, [1.0, 0.45, 0.6], OIII], cavity: 0.3 },
   { key: 'm20', name: 'Trifid Nebula', type: 'emission', ra: 270.6, dec: -23.03, distPc: 1560, radiusPc: 6, colours: [HA, BLUE, OIII], cavity: 0.5 },
-  { key: 'ngc3372', name: 'Carina Nebula', type: 'emission', ra: 161.265, dec: -59.867, distPc: 2300, radiusPc: 40, colours: [HA, OIII, SII], cavity: 0.3 },
+  { key: 'ngc3372', name: 'Carina Nebula', type: 'emission', ra: 161.265, dec: -59.867, distPc: 2300, radiusPc: 40, colours: [ORANGE, GOLD, HA], cavity: 0.3, shape: 1 },
   { key: 'ngc2237', name: 'Rosette Nebula', type: 'emission', ra: 97.98, dec: 4.95, distPc: 1600, radiusPc: 20, colours: [HA, [1.0, 0.5, 0.4], OIII], cavity: 1 },
   { key: 'ngc7000', name: 'North America Nebula', type: 'emission', ra: 314.7, dec: 44.3, distPc: 590, radiusPc: 15, colours: [HA, SII, OIII], cavity: 0.1 },
+  { key: 'ic5070', name: 'Pelican Nebula', type: 'emission', ra: 312.75, dec: 44.37, distPc: 600, radiusPc: 4, colours: [HA, GOLD, OIII], cavity: 0.2, shape: 1 },
   { key: '30dor', name: 'Tarantula Nebula', type: 'emission', ra: 84.676, dec: -69.101, distPc: 49970, radiusPc: 100, colours: [HA, OIII, [0.9, 0.5, 1.0]], cavity: 0.7 },
+  { key: 'ic1805', name: 'Heart Nebula', type: 'emission', ra: 38.2, dec: 61.45, distPc: 2300, radiusPc: 23, colours: [HA, PINK, SII], cavity: 0.9 },
+  { key: 'ic1848', name: 'Soul Nebula', type: 'emission', ra: 42.8, dec: 60.4, distPc: 2000, radiusPc: 20, colours: [HA, CREAM, SII], cavity: 0.8, shape: 1 },
+  { key: 'ngc2024', name: 'Flame Nebula', type: 'emission', ra: 85.42, dec: -1.85, distPc: 420, radiusPc: 1.5, colours: [ORANGE, GOLD, [0.6, 0.2, 0.1]], cavity: 0.2 },
+  { key: 'ngc2264', name: 'Cone Nebula', type: 'emission', ra: 100.25, dec: 9.9, distPc: 760, radiusPc: 4, colours: [HA, BLUE, PINK], cavity: 0.4, shape: 1 },
+  { key: 'ngc7635', name: 'Bubble Nebula', type: 'emission', ra: 350.2, dec: 61.2, distPc: 2400, radiusPc: 3, colours: [HA, OIII, GOLD], cavity: 1 },
+  { key: 'ic1396', name: "Elephant's Trunk Nebula", type: 'emission', ra: 324.7, dec: 57.5, distPc: 870, radiusPc: 15, colours: [HA, GOLD, SII], cavity: 0.6, shape: 1 },
+  { key: 'ngc6334', name: "Cat's Paw Nebula", type: 'emission', ra: 260.2, dec: -35.97, distPc: 1300, radiusPc: 8, colours: [HA, PINK, ORANGE], cavity: 0.3 },
+  { key: 'ngc6357', name: 'Lobster Nebula', type: 'emission', ra: 261.2, dec: -34.2, distPc: 1700, radiusPc: 7, colours: [ORANGE, CREAM, HA], cavity: 0.5, shape: 1 },
+  { key: 'ngc1499', name: 'California Nebula', type: 'emission', ra: 60.2, dec: 36.4, distPc: 300, radiusPc: 7, colours: [HA, PINK, HA], cavity: 0 },
+  { key: 'ic4628', name: 'Prawn Nebula', type: 'emission', ra: 254.2, dec: -40.4, distPc: 1800, radiusPc: 8, colours: [HA, ORANGE, OIII], cavity: 0.4 },
+  { key: 'ic2944', name: 'Running Chicken Nebula', type: 'emission', ra: 174.4, dec: -63.0, distPc: 1800, radiusPc: 10, colours: [HA, PINK, OIII], cavity: 0.5 },
+  { key: 'ngc7380', name: 'Wizard Nebula', type: 'emission', ra: 341.8, dec: 58.1, distPc: 2200, radiusPc: 5, colours: [HA, GOLD, OIII], cavity: 0.6, shape: 1 },
+  { key: 'ngc2174', name: 'Monkey Head Nebula', type: 'emission', ra: 92.3, dec: 20.5, distPc: 2100, radiusPc: 7, colours: [ORANGE, GOLD, OIII], cavity: 0.5, shape: 1 },
+  { key: 'ic2177', name: 'Seagull Nebula', type: 'emission', ra: 106.0, dec: -10.6, distPc: 1100, radiusPc: 15, colours: [HA, PINK, BLUE], cavity: 0.2 },
+  { key: 'rcw49', name: 'RCW 49', type: 'emission', ra: 156.0, dec: -57.76, distPc: 4200, radiusPc: 15, colours: [ORANGE, OIII, VIOLET], cavity: 0.8, shape: 1 },
+  { key: 'ngc3603', name: 'NGC 3603', type: 'emission', ra: 168.79, dec: -61.26, distPc: 7000, radiusPc: 10, colours: [ORANGE, CREAM, HA], cavity: 0.8, shape: 1 },
+  { key: 'ngc604', name: 'NGC 604', type: 'emission', ra: 23.65, dec: 30.78, distPc: 840000, radiusPc: 230, colours: [HA, OIII, PINK], cavity: 0.7 },
+  { key: 'barnard-loop', name: "Barnard's Loop", type: 'emission', look: 'remnant', ra: 86.0, dec: -1.0, distPc: 440, radiusPc: 45, colours: [HA, HA, SII] },
+  { key: 'gum', name: 'Gum Nebula', type: 'emission', look: 'remnant', ra: 128.0, dec: -43.0, distPc: 450, radiusPc: 120, colours: [HA, SII, HA] },
+  { key: 'ngc6888', name: 'Crescent Nebula', type: 'emission', look: 'remnant', label: 'Wolf\u2013Rayet wind bubble', ra: 303.03, dec: 38.35, distPc: 1500, radiusPc: 3.5, colours: [HA, OIII, GOLD] },
+  { key: 'ngc2359', name: "Thor's Helmet", type: 'emission', look: 'remnant', label: 'Wolf\u2013Rayet wind bubble', ra: 109.3, dec: -13.2, distPc: 3670, radiusPc: 4, colours: [OIII, HA, BLUE] },
   { key: 'm57', name: 'Ring Nebula', type: 'planetary', ra: 283.396, dec: 33.029, distPc: 790, radiusPc: 0.25, colours: [HA, OIII, [0.95, 0.85, 0.3]] },
   { key: 'ngc7293', name: 'Helix Nebula', type: 'planetary', ra: 337.411, dec: -20.837, distPc: 200, radiusPc: 0.45, colours: [HA, OIII, [1.0, 0.6, 0.3]] },
-  { key: 'm27', name: 'Dumbbell Nebula', type: 'planetary', ra: 299.902, dec: 22.721, distPc: 417, radiusPc: 0.7, colours: [HA, OIII, [0.6, 1.0, 0.5]], bipolar: 1 },
-  { key: 'ngc6543', name: "Cat's Eye Nebula", type: 'planetary', ra: 269.639, dec: 66.633, distPc: 1000, radiusPc: 0.12, colours: [HA, OIII, BLUE], bipolar: 0.6 },
+  { key: 'm27', name: 'Dumbbell Nebula', type: 'planetary', ra: 299.902, dec: 22.721, distPc: 417, radiusPc: 0.7, colours: [HA, OIII, [0.6, 1.0, 0.5]], bipolar: 0.4 },
+  { key: 'ngc6543', name: "Cat's Eye Nebula", type: 'planetary', ra: 269.639, dec: 66.633, distPc: 1000, radiusPc: 0.12, colours: [HA, OIII, BLUE], bipolar: 0.35 },
+  { key: 'ngc6302', name: 'Butterfly Nebula', type: 'planetary', ra: 258.435, dec: -37.103, distPc: 1040, radiusPc: 0.3, colours: [[1.0, 0.5, 0.3], CREAM, VIOLET], bipolar: 1, cavity: 0.55 },
+  { key: 'ngc6537', name: 'Red Spider Nebula', type: 'planetary', ra: 271.086, dec: -19.84, distPc: 1900, radiusPc: 0.15, colours: [ORANGE, CREAM, [0.8, 0.2, 0.1]], bipolar: 1, cavity: 0.9 },
+  { key: 'm2-9', name: 'Twin Jet Nebula', type: 'planetary', ra: 260.89, dec: -10.14, distPc: 650, radiusPc: 0.1, colours: [VIOLET, GREEN, PINK], bipolar: 1, cavity: 0.05 },
+  { key: 'mz3', name: 'Ant Nebula', type: 'planetary', ra: 244.97, dec: -51.98, distPc: 2500, radiusPc: 0.25, colours: [PINK, CREAM, VIOLET], bipolar: 1, cavity: 0.4 },
+  { key: 'boomerang', name: 'Boomerang Nebula', type: 'planetary', label: 'Pre-planetary nebula', ra: 193.6, dec: -54.52, distPc: 1500, radiusPc: 0.1, colours: [BLUE, CREAM, BLUE], bipolar: 1, cavity: 0.3 },
+  { key: 'ngc2392', name: 'Eskimo Nebula', type: 'planetary', ra: 112.29, dec: 20.91, distPc: 1300, radiusPc: 0.1, colours: [[1.0, 0.35, 0.2], [0.55, 0.9, 1.0], [0.85, 0.5, 0.35]] },
+  { key: 'ngc3242', name: 'Ghost of Jupiter', type: 'planetary', ra: 156.19, dec: -18.64, distPc: 1400, radiusPc: 0.13, colours: [PINK, OIII, BLUE], bipolar: 0.3 },
+  { key: 'ngc7009', name: 'Saturn Nebula', type: 'planetary', ra: 316.04, dec: -11.36, distPc: 1400, radiusPc: 0.12, colours: [HA, OIII, GOLD], bipolar: 0.45 },
+  { key: 'm97', name: 'Owl Nebula', type: 'planetary', ra: 168.7, dec: 55.02, distPc: 620, radiusPc: 0.28, colours: [[0.9, 0.3, 0.3], OIII, HA] },
+  { key: 'm76', name: 'Little Dumbbell Nebula', type: 'planetary', ra: 25.58, dec: 51.58, distPc: 780, radiusPc: 0.4, colours: [HA, OIII, PINK], bipolar: 0.8, cavity: 0.7 },
+  { key: 'ngc3132', name: 'Southern Ring Nebula', type: 'planetary', ra: 151.76, dec: -40.44, distPc: 750, radiusPc: 0.2, colours: [ORANGE, OIII, HA], bipolar: 0.2 },
+  { key: 'ic418', name: 'Spirograph Nebula', type: 'planetary', ra: 81.86, dec: -12.7, distPc: 1300, radiusPc: 0.06, colours: [[1.0, 0.45, 0.25], OIII, GOLD], bipolar: 0.25 },
+  { key: 'abell21', name: 'Medusa Nebula', type: 'planetary', ra: 112.26, dec: 13.25, distPc: 450, radiusPc: 0.6, colours: [HA, OIII, PINK], bipolar: 0.15 },
+  { key: 'homunculus', name: 'Homunculus Nebula', type: 'planetary', label: 'Ejecta of Eta Carinae', ra: 161.265, dec: -59.684, distPc: 2300, radiusPc: 0.1, colours: [[1.0, 0.6, 0.35], CREAM, HA], bipolar: 1, cavity: 0.85 },
+  { key: 'sn1987a', name: 'SN 1987A', type: 'remnant', look: 'planetary', ra: 83.866, dec: -69.27, distPc: 51400, radiusPc: 0.2, colours: [HA, CREAM, GOLD], bipolar: 0.5 },
   { key: 'm1', name: 'Crab Nebula', type: 'plerion', ra: 83.633, dec: 22.0145, distPc: 2000, radiusPc: 1.7, colours: [SII, [0.45, 0.6, 1.0], HA] },
+  { key: '3c58', name: '3C 58', type: 'plerion', ra: 31.4, dec: 64.83, distPc: 3200, radiusPc: 2.5, colours: [ORANGE, BLUE, HA] },
   { key: 'veil', name: 'Veil Nebula', type: 'remnant', ra: 312.75, dec: 30.7, distPc: 735, radiusPc: 18, colours: [HA, OIII, BLUE] },
   { key: 'cas-a', name: 'Cassiopeia A', type: 'remnant', ra: 350.85, dec: 58.815, distPc: 3400, radiusPc: 1.6, colours: [[0.4, 1.0, 0.5], HA, BLUE] },
   { key: 'vela-snr', name: 'Vela Supernova Remnant', type: 'remnant', ra: 128.5, dec: -45.5, distPc: 287, radiusPc: 18, colours: [HA, OIII, BLUE] },
+  { key: 'tycho', name: "Tycho's Supernova Remnant", type: 'remnant', ra: 6.33, dec: 64.14, distPc: 2500, radiusPc: 3.7, colours: [GOLD, BLUE, HA] },
+  { key: 'kepler', name: "Kepler's Supernova Remnant", type: 'remnant', ra: 262.67, dec: -21.49, distPc: 5100, radiusPc: 2.6, colours: [GOLD, [0.5, 0.7, 1.0], HA] },
+  { key: 'sn1006', name: 'SN 1006', type: 'remnant', ra: 225.7, dec: -41.9, distPc: 2200, radiusPc: 9.5, colours: [BLUE, HA, CREAM] },
+  { key: 'puppis-a', name: 'Puppis A', type: 'remnant', ra: 125.5, dec: -43.0, distPc: 2200, radiusPc: 16, colours: [HA, OIII, GOLD] },
+  { key: 'simeis147', name: 'Spaghetti Nebula', type: 'remnant', ra: 85.0, dec: 27.8, distPc: 1200, radiusPc: 16, colours: [HA, PINK, HA] },
+  { key: 'ic443', name: 'Jellyfish Nebula', type: 'remnant', ra: 94.25, dec: 22.53, distPc: 1500, radiusPc: 10, colours: [HA, OIII, VIOLET] },
+  { key: 'rcw86', name: 'RCW 86', type: 'remnant', ra: 220.7, dec: -62.5, distPc: 2500, radiusPc: 15, colours: [HA, BLUE, GOLD] },
+  { key: 'w50', name: 'Manatee Nebula (W50)', type: 'remnant', ra: 287.95, dec: 4.98, distPc: 5500, radiusPc: 50, colours: [HA, BLUE, VIOLET] },
   { key: 'ic2118', name: 'Witch Head Nebula', type: 'reflection', ra: 76.5, dec: -7.2, distPc: 270, radiusPc: 7, colours: [BLUE, [0.6, 0.75, 1.0], BLUE] },
   { key: 'm45-neb', name: 'Pleiades Nebulosity', type: 'reflection', ra: 56.75, dec: 24.1167, distPc: 136, radiusPc: 2.5, colours: [BLUE, [0.7, 0.8, 1.0], BLUE] },
-  { key: 'b33', name: 'Horsehead Nebula', type: 'dark', ra: 85.24, dec: -2.46, distPc: 422, radiusPc: 1.2, colours: [[0.5, 0.25, 0.2], HA, HA] },
+  { key: 'ngc7023', name: 'Iris Nebula', type: 'reflection', ra: 315.4, dec: 68.17, distPc: 430, radiusPc: 1.0, colours: [BLUE, CREAM, BLUE] },
+  { key: 'm78', name: 'M78', type: 'reflection', ra: 86.69, dec: 0.08, distPc: 420, radiusPc: 1.2, colours: [BLUE, [0.7, 0.8, 1.0], VIOLET] },
+  { key: 'ngc1977', name: 'Running Man Nebula', type: 'reflection', ra: 83.85, dec: -4.82, distPc: 420, radiusPc: 1.8, colours: [BLUE, [0.7, 0.8, 1.0], HA] },
+  { key: 'rho-oph', name: 'Rho Ophiuchi Cloud Complex', type: 'reflection', ra: 246.8, dec: -24.5, distPc: 140, radiusPc: 4, colours: [GOLD, BLUE, HA] },
+  { key: 'b33', name: 'Horsehead Nebula', type: 'dark', ra: 85.24, dec: -2.46, distPc: 422, radiusPc: 1.2, colours: [[0.5, 0.25, 0.2], HA, HA], shape: 1 },
   { key: 'coalsack', name: 'Coalsack Nebula', type: 'dark', ra: 191.0, dec: -62.9, distPc: 180, radiusPc: 6, colours: [[0.3, 0.22, 0.2], HA, HA] },
+  { key: 'b68', name: 'Barnard 68', type: 'dark', ra: 260.67, dec: -23.83, distPc: 150, radiusPc: 0.1, colours: [[0.3, 0.22, 0.2], [0.5, 0.3, 0.2], HA] },
+  { key: 'pipe', name: 'Pipe Nebula', type: 'dark', ra: 262.5, dec: -27.0, distPc: 130, radiusPc: 5, colours: [[0.3, 0.22, 0.2], [0.6, 0.4, 0.3], HA] },
 ];
+
+/*
+ * The catalogues give a nebula's place, size and kind but not how it looks,
+ * so each one is dressed from a palette of what that kind looks like: Hα red
+ * through the orange and gold of a SpaceEngine-style render for H II regions,
+ * the oxygen-blue centres and red rims of planetaries.
+ */
+const EMISSION_PALETTES = [
+  [HA, OIII, SII],
+  [ORANGE, CREAM, HA],
+  [HA, PINK, BLUE],
+  [ORANGE, OIII, [0.9, 0.25, 0.15]],
+  [[0.95, 0.12, 0.12], GOLD, [0.6, 0.1, 0.25]],
+  [PINK, [0.9, 0.7, 1.0], HA],
+];
+const PLANETARY_PALETTES = [
+  [HA, OIII, GOLD],
+  [[1.0, 0.35, 0.2], [0.5, 0.9, 1.0], [0.95, 0.6, 0.4]],
+  [VIOLET, GREEN, PINK],
+  [ORANGE, CREAM, [0.9, 0.3, 0.15]],
+  [[0.3, 0.6, 1.0], [0.6, 1.0, 0.9], [1.0, 0.3, 0.35]],
+  [PINK, OIII, VIOLET],
+];
+const PN_SHAPES = { bipolar: 1, elliptical: 0.35, irregular: 0.15, round: 0, stellar: 0 };
+
+function dressNebula(entry) {
+  const rnd = random(hashKey(entry.key));
+  const pick = (list) => list[Math.floor(rnd() * list.length) % list.length];
+  if (entry.type === 'planetary') {
+    return {
+      ...entry,
+      colours: pick(PLANETARY_PALETTES),
+      bipolar: PN_SHAPES[entry.shape] ?? 0,
+      cavity: rnd(),
+      shape: 0,
+    };
+  }
+  return {
+    ...entry,
+    colours: pick(EMISSION_PALETTES),
+    cavity: 0.15 + rnd() * 0.8,
+    shape: rnd() < 0.35 ? 1 : 0,
+  };
+}
 
 export const CLUSTERS = [
   { key: 'm45', name: 'Pleiades', type: 'open', ra: 56.75, dec: 24.1167, distPc: 136, radiusPc: 4, stars: 1000, ageMyr: 110 },
@@ -81,6 +194,12 @@ export const CLUSTERS = [
   { key: 'm3', name: 'M3', type: 'globular', ra: 205.548, dec: 28.377, distPc: 10200, radiusPc: 27, stars: 50000, core: 0.1 },
   { key: 'm4', name: 'M4', type: 'globular', ra: 245.897, dec: -26.526, distPc: 2200, radiusPc: 11, stars: 30000, core: 0.22 },
   { key: 'm22', name: 'M22', type: 'globular', ra: 279.1, dec: -23.9, distPc: 3200, radiusPc: 15, stars: 45000, core: 0.18 },
+  { key: 'trapezium', name: 'Trapezium Cluster', type: 'open', ra: 83.82, dec: -5.39, distPc: 412, radiusPc: 0.6, stars: 900, ageMyr: 0.5 },
+  { key: 'arches', name: 'Arches Cluster', type: 'open', ra: 266.46, dec: -28.82, distPc: 8000, radiusPc: 0.5, stars: 3000, ageMyr: 2.5 },
+  { key: 'quintuplet', name: 'Quintuplet Cluster', type: 'open', ra: 266.56, dec: -28.83, distPc: 8000, radiusPc: 1, stars: 2000, ageMyr: 4 },
+  { key: 'wd2', name: 'Westerlund 2', type: 'open', ra: 156.0, dec: -57.76, distPc: 4200, radiusPc: 1.5, stars: 3000, ageMyr: 2 },
+  { key: 'hd97950', name: 'NGC 3603 Cluster', type: 'open', ra: 168.79, dec: -61.26, distPc: 7000, radiusPc: 1.5, stars: 3000, ageMyr: 1 },
+  { key: 'pismis24', name: 'Pismis 24', type: 'open', ra: 261.19, dec: -34.2, distPc: 1700, radiusPc: 1, stars: 800, ageMyr: 1 },
 ];
 
 export const NEUTRON_STARS = [
@@ -216,6 +335,7 @@ const NEBULA_FRAGMENT = /* glsl */ `
   uniform float uBright;
   uniform float uCavity;
   uniform float uBipolar;
+  uniform float uShape;
   uniform float uSteps;
   varying vec3 vLocal;
 
@@ -227,6 +347,16 @@ const NEBULA_FRAGMENT = /* glsl */ `
       amp *= 0.5;
     }
     return sum / 0.97;
+  }
+
+  float fbm3(vec3 p) {
+    float sum = 0.0, amp = 0.5;
+    for (int i = 0; i < 3; i++) {
+      sum += amp * texture(uNoise, p).r;
+      p = p * 2.07 + 0.29;
+      amp *= 0.5;
+    }
+    return sum / 0.875;
   }
 
   // Thin bright walls where a noise field crosses its midpoint: filaments.
@@ -247,30 +377,77 @@ const NEBULA_FRAGMENT = /* glsl */ `
     if (uType < 0.5) {
       // H II region: ionised gas lit from within, a hollow blown by the young
       // stars at its heart, the doubly ionised oxygen nearest them, and dark
-      // lanes of dust crossing it all.
-      float gas = smoothstep(0.42, 0.78, f) * body;
-      gas *= mix(1.0, smoothstep(0.08, 0.42, rw), uCavity);
+      // lanes of dust crossing it all. Where a cloud's surface faces the
+      // stars it is an ionisation front, the brightest gas in the nebula, and
+      // the turbulence draws the rest out into filaments.
+      float gas = smoothstep(0.42, 0.76, f) * body;
+      float hollow = mix(1.0, smoothstep(0.08, 0.42, rw), uCavity);
+      gas *= hollow;
+      float front = (smoothstep(0.47, 0.6, f) - smoothstep(0.6, 0.74, f)) * body * hollow;
+      float strandBase = 1.0 - abs(fbm3(q * 1.25 + warp * 0.9) * 2.0 - 1.0);
+      float strands = strandBase * strandBase * strandBase * strandBase * strandBase;
+      float lit = 0.4 + 1.5 / (1.0 + rw * rw * 7.0);
       float inner = smoothstep(0.75, 0.1, rw);
       vec3 colour = mix(uColA, uColB, inner * smoothstep(0.5, 0.85, f));
       colour = mix(colour, uColC, smoothstep(0.6, 0.9, texture(uNoise, q * 2.3 + 5.0).r) * 0.5);
-      float dust = smoothstep(0.52, 0.8, fbm(q * 1.7 + 11.3 + warp)) * body;
-      vec3 starlight = uColB * exp(-rw * rw * 40.0) * 2.5;
-      return vec4(colour * gas * 2.4 + starlight, dust * 5.0 + gas * 0.4);
+      float dust = smoothstep(0.54, 0.8, fbm3(q * 1.7 + 11.3 + warp)) * body;
+      vec3 emit = colour * (gas * 1.0 + front * 1.4 + strands * body * hollow * 0.9) * lit;
+      if (uShape > 0.5) {
+        // Pillars: columns of cold gas standing in the hollow, pointing at
+        // the stars that are eroding them, each tipped with a bright rim.
+        vec3 n = pw / max(rw, 1e-3);
+        float ang = texture(uNoise, n * 0.55 + uSeed * 0.37).r + (fbm3(q * 3.1) - 0.5) * 0.1;
+        float column = smoothstep(0.64, 0.7, ang);
+        float tip = 0.3 + texture(uNoise, n * 0.4 + uSeed).g * 0.3;
+        float reach = smoothstep(tip, tip + 0.05, rw) * smoothstep(1.0, 0.7, rw);
+        float pillar = column * reach;
+        float cap = column * (smoothstep(tip - 0.03, tip + 0.03, rw) - smoothstep(tip + 0.03, tip + 0.12, rw));
+        float side = (smoothstep(0.6, 0.65, ang) - smoothstep(0.65, 0.7, ang)) * reach;
+        dust += pillar * 4.0;
+        emit = emit * (1.0 - pillar * 0.85) + mix(uColA, uColB, 0.6) * (cap * 2.2 + side * 1.0) * lit;
+      }
+      vec3 starlight = uColB * exp(-rw * rw * 40.0) * 2.0;
+      return vec4(emit + starlight, dust * 5.0 + gas * 0.4);
     }
     if (uType < 1.5) {
       // A dying star's shell: hot oxygen inside, hydrogen at the rim, drawn
       // out along an axis into lobes when the star had a companion.
       float along = dot(p, uAxis);
-      vec3 across = p - uAxis * along;
-      float shellR = length(vec2(length(across), along * mix(1.0, 0.55, uBipolar)));
-      float waist = mix(1.0, smoothstep(0.0, 0.5, abs(along)) * 0.8 + 0.2, uBipolar);
-      float shell = exp(-pow((shellR - 0.55) / 0.14, 2.0)) * waist;
-      float knots = 0.5 + fbm(q * 2.0 + warp) * 0.9;
-      float gas = shell * knots + exp(-shellR * shellR * 14.0) * 0.12;
-      vec3 colour = mix(uColB, uColA, smoothstep(0.42, 0.72, shellR));
-      colour = mix(colour, uColC, smoothstep(0.65, 0.8, shellR) * 0.5);
+      vec3 acrossV = p - uAxis * along;
+      float rho = length(acrossV);
       vec3 dwarf = vec3(0.8, 0.9, 1.0) * exp(-dot(p, p) * 2500.0) * 25.0;
-      return vec4(colour * gas * 0.9 + dwarf, gas * 0.25);
+      float knots = 0.55 + fbm3(q * 2.4 + warp) * 0.9;
+      if (uBipolar < 0.75) {
+        // Round to elliptical: a bright rim of knots and radial spokes round
+        // a glowing oxygen-blue interior, and the faint halo of an earlier
+        // wind outside it.
+        float sr = length(vec2(rho, along * mix(1.0, 0.55, uBipolar)));
+        vec3 n = p / max(length(p), 1e-3);
+        float spokes = 0.55 + 0.9 * pow(texture(uNoise, n * 1.6 + uSeed).r, 3.0);
+        float shell = exp(-pow((sr - 0.56) / 0.12, 2.0)) * spokes;
+        float fill = smoothstep(0.62, 0.1, sr) * 0.35;
+        float halo = exp(-pow((sr - 0.84) / 0.09, 2.0)) * 0.22;
+        vec3 colour = mix(uColB, uColA, smoothstep(0.3, 0.6, sr));
+        colour = mix(colour, uColC, smoothstep(0.62, 0.86, sr));
+        float gas = (shell + fill + halo) * knots;
+        return vec4(colour * gas * 1.1 + dwarf, gas * 0.25);
+      }
+      // Bipolar: two lobes blown out either side of a dense waist, their
+      // walls streaked along the outflow, the waist itself glowing hottest.
+      float width = mix(0.12, 0.42, uCavity);
+      float h = abs(along);
+      float c = 0.42;
+      float u = (h - c) / c;
+      float profile = width * sqrt(max(0.0, 1.0 - u * u)) * (1.0 + (knots - 1.0) * 0.25);
+      float wall = exp(-pow((rho - profile) / (0.018 + 0.12 * profile), 2.0)) * step(h, 2.0 * c);
+      float filled = smoothstep(-0.01, 0.03, profile - rho) * 0.1;
+      vec3 dir = acrossV / max(rho, 1e-3);
+      float streak = 0.2 + 1.9 * pow(texture(uNoise, dir * 1.3 + vec3(0.0, 0.0, h * 0.35) + uSeed).r, 3.5);
+      float waistGlow = exp(-(rho * rho + along * along) * 90.0) * 3.0;
+      float gas = (wall + filled) * streak * knots;
+      vec3 colour = mix(uColB, uColA, smoothstep(0.05, 0.55, h));
+      colour = mix(colour, uColC, smoothstep(0.55, 1.0, rho / max(width, 0.01)) * 0.5);
+      return vec4(colour * gas * 1.3 + uColB * waistGlow + dwarf, gas * 0.2 + waistGlow * 0.4);
     }
     if (uType < 2.5) {
       // Supernova shell: a thin, torn front of glowing filaments.
@@ -299,6 +476,22 @@ const NEBULA_FRAGMENT = /* glsl */ `
     // Dark nebula: cold dust and nothing to light it but a faint glow at the edge.
     float dust = smoothstep(0.36, 0.62, f) * body;
     float rim = smoothstep(0.4, 0.62, f) - smoothstep(0.62, 0.8, f);
+    if (uShape > 0.5) {
+      // The edge of a dark cloud against the glowing sheet of gas beyond
+      // it, with a column of its dust standing up into the glow: what makes
+      // the Horsehead a silhouette.
+      float s = dot(pw, uAxis);
+      float ragged = (fbm3(q * 2.2 + 3.1) - 0.5) * 0.35;
+      float cloud = smoothstep(0.03, -0.06, s + ragged) * body;
+      vec3 side = normalize(cross(uAxis, vec3(0.3, 1.0, 0.2)));
+      float rhoC = length(pw - uAxis * s);
+      float neck = smoothstep(0.15, 0.08, rhoC + (f - 0.5) * 0.15) * smoothstep(0.42, 0.3, s) * step(-0.1, s);
+      float head = smoothstep(0.17, 0.09, length(pw - uAxis * 0.36 - side * 0.09) + (f - 0.5) * 0.12);
+      float dark = max(cloud, max(neck, head));
+      float glow = smoothstep(-0.05, 0.25, s) * body * smoothstep(0.3, 0.7, fbm3(q * 1.3 + 7.0)) * (1.0 - dark);
+      float edge = (smoothstep(0.0, 0.08, dark) - smoothstep(0.08, 0.3, dark)) * body;
+      return vec4(uColB * (glow * 3.0 + edge * 1.2), dark * 30.0 + dust * 0.5);
+    }
     return vec4(uColB * rim * body * 0.12, dust * 9.0);
   }
 
@@ -329,16 +522,72 @@ const NEBULA_FRAGMENT = /* glsl */ `
       transmit *= exp(-s.a * dt);
       if (transmit < 0.01) break;
     }
-    gl_FragColor = vec4(colour, 1.0 - transmit);
+    // Brightness compressed before the tone curve sees it, so the densest
+    // gas stays orange or red instead of being bleached to cream.
+    float peak = max(max(colour.r, colour.g), colour.b);
+    colour *= 1.35 / (1.0 + 0.6 * peak);
+    // A cloud drawn faint because it is small on the sky is dimmed as a
+    // whole, its dust included; only a dark nebula is meant to be a hole.
+    float cover = uType > 4.5 ? 1.0 : clamp(uBright * 2.0, 0.25, 1.0);
+    gl_FragColor = vec4(colour, (1.0 - transmit) * cover);
     #include <logdepthbuf_fragment>
   }
 `;
 
-class Nebula {
-  constructor(spec, noise, geometry) {
+/**
+ * Adds and removes an object's group from the scene as it comes into and out
+ * of view. Thousands of catalogue objects sit in the scene graph otherwise,
+ * every one walked for its matrix each frame while nothing of it is drawn.
+ */
+class Shown {
+  constructor(spec) {
     this.spec = spec;
     this.world = deepObjectWorld(spec);
     this.radiusKm = spec.radiusPc * PC_KM;
+    this.group = new Group();
+    this.group.scale.setScalar(this.radiusKm);
+    this.parent = null;
+    this.shownAt = -Infinity;
+  }
+
+  show(parent, on, frame) {
+    if (on) this.shownAt = frame;
+    if (on && !this.parent) {
+      parent.add(this.group);
+      this.parent = parent;
+    } else if (!on && this.parent) {
+      this.parent.remove(this.group);
+      this.parent = null;
+    }
+  }
+}
+
+/** A star-forming cloud's own stars: young, and as many as its size suggests. */
+function embeddedStars(spec) {
+  if (spec.type !== 'emission' && spec.type !== 'reflection') return null;
+  if ((spec.look ?? spec.type) === 'remnant') return null;
+  return {
+    key: `${spec.key}*`,
+    type: 'open',
+    ageMyr: spec.type === 'emission' ? 2 : 40,
+    stars: Math.round(Math.min(1600, Math.max(120, spec.radiusPc * 45))),
+  };
+}
+
+class Nebula extends Shown {
+  constructor(spec, noise, geometry, starMaterial) {
+    super(spec);
+    this.noise = noise;
+    this.geometry = geometry;
+    this.starMaterial = starMaterial;
+    this.material = null;
+    this.stars = null;
+    this.inside = 0;
+  }
+
+  build() {
+    if (this.material) return;
+    const spec = this.spec;
     const rnd = random(hashKey(spec.key));
     const [a, b, c] = spec.colours;
     const axis = new Vector3(rnd() - 0.5, rnd() - 0.5, rnd() - 0.5).normalize();
@@ -346,9 +595,9 @@ class Nebula {
       vertexShader: NEBULA_VERTEX,
       fragmentShader: NEBULA_FRAGMENT,
       uniforms: {
-        uNoise: { value: noise },
+        uNoise: { value: this.noise },
         uCamera: { value: new Vector3() },
-        uType: { value: NEBULA_TYPES[spec.type] ?? 0 },
+        uType: { value: NEBULA_TYPES[spec.look ?? spec.type] ?? 0 },
         uColA: { value: new Vector3(...a) },
         uColB: { value: new Vector3(...b) },
         uColC: { value: new Vector3(...c) },
@@ -357,6 +606,7 @@ class Nebula {
         uBright: { value: 1 },
         uCavity: { value: spec.cavity ?? 0.4 },
         uBipolar: { value: spec.bipolar ?? 0 },
+        uShape: { value: spec.shape ?? 0 },
         uSteps: { value: 48 },
       },
       side: BackSide,
@@ -366,28 +616,42 @@ class Nebula {
       blendSrc: OneFactor,
       blendDst: OneMinusSrcAlphaFactor,
     });
-    this.mesh = new Mesh(geometry, this.material);
-    this.mesh.renderOrder = 4;
-    this.mesh.frustumCulled = false;
-    this.group = new Group();
-    this.group.add(this.mesh);
-    this.group.scale.setScalar(this.radiusKm);
+    const mesh = new Mesh(this.geometry, this.material);
+    mesh.renderOrder = 4;
+    mesh.frustumCulled = false;
+    this.group.add(mesh);
+    // Drawn before the gas, so the dust in front of a star dims it.
+    const stars = embeddedStars(spec);
+    if (stars) {
+      this.stars = new Points(buildCluster(stars), this.starMaterial);
+      this.stars.renderOrder = 3;
+      this.stars.frustumCulled = false;
+      this.group.add(this.stars);
+    }
   }
 
-  update(cameraLocal, distanceKm, pixelsPerRadian, steps) {
+  /** The cheap part, done for every nebula every frame. */
+  measure(distanceKm) {
+    this.distanceKm = distanceKm;
+    this.apparent = this.radiusKm / Math.max(distanceKm, this.radiusKm);
+    /** How far inside the cloud the camera is, 0 outside to 1 at its heart. */
+    this.inside = Math.max(0, 1 - distanceKm / this.radiusKm);
+  }
+
+  update(cameraLocal, pixelsPerRadian, steps) {
+    this.build();
     const u = this.material.uniforms;
     u.uCamera.value.copy(cameraLocal).multiplyScalar(1 / this.radiusKm);
     // A cloud is the same surface brightness from any distance, and a real
     // one is faint: Orion from Earth is a smudge. Up close the eye adapts to
-    // it, so the drawn brightness follows the apparent size, not the distance.
-    const apparent = this.radiusKm / Math.max(distanceKm, this.radiusKm);
-    const near = Math.min(1, Math.max(0, (apparent - 0.008) / 0.3));
-    u.uBright.value = 0.05 + 0.95 * near * near * (3 - 2 * near);
-    /** How far inside the cloud the camera is, 0 outside to 1 at its heart. */
-    this.inside = Math.max(0, 1 - distanceKm / this.radiusKm);
-    u.uSteps.value = steps;
-    // Too small to see: below a couple of pixels there is nothing to march.
-    this.group.visible = apparent * pixelsPerRadian > 1.5;
+    // it, so the drawn brightness follows the apparent size, not the distance
+    // — and from a planet a few of its radii off, it fills the sky.
+    const near = Math.min(1, Math.max(0, (this.apparent - 0.004) / 0.15));
+    // From inside, the whole sky is cloud, and at the brightness it has
+    // seen whole from outside it would be a white-out.
+    u.uBright.value = (0.05 + 0.95 * near * near * (3 - 2 * near)) * (1 - 0.5 * Math.sqrt(this.inside));
+    // A few pixels across needs nothing like the full march.
+    u.uSteps.value = this.apparent * pixelsPerRadian < 60 ? Math.min(steps, 24) : steps;
   }
 }
 
@@ -476,14 +740,16 @@ const CLUSTER_VERTEX = /* glsl */ `
   attribute float lum;
   uniform float uGain;
   uniform float uPixelRatio;
+  uniform float uMaxFlux;
+  uniform float uMaxSize;
   varying vec3 vColour;
   varying float vEnergy;
   void main() {
     vec4 mv = modelViewMatrix * vec4(position, 1.0);
     float pc = max(length(mv.xyz) / ${PC_KM.toExponential(8)}, 1e-6);
     // Flux in units of a zeroth-magnitude star.
-    float flux = min(lum / (pc * pc) * uGain, 3000.0);
-    float size = clamp(2.0 + 2.4 * log2(1.0 + flux), 2.0, 30.0);
+    float flux = min(lum / (pc * pc) * uGain, uMaxFlux);
+    float size = clamp(2.0 + 2.4 * log2(1.0 + flux), 2.0, uMaxSize);
     // The same light spread over the sprite: a faint star is a dim two-pixel
     // dot, and ten thousand of them overlapping are the glow of the cluster.
     vEnergy = flux / (0.09 * size * size);
@@ -509,16 +775,50 @@ const CLUSTER_FRAGMENT = /* glsl */ `
   }
 `;
 
-class Cluster {
+/**
+ * Stars as points lit by their own luminosity: `lum` in Suns per vertex,
+ * `color` linear. Clusters use it, and so do the stars orbiting a black hole,
+ * which are a few hundred au off and need the caps lower: at the real
+ * brightness every one of them is a glare thirty pixels wide.
+ */
+export function starPointsMaterial({ maxFlux = 3000, maxSize = 30 } = {}) {
+  return new ShaderMaterial({
+    vertexShader: CLUSTER_VERTEX,
+    fragmentShader: CLUSTER_FRAGMENT,
+    uniforms: {
+      uGain: { value: 1.17 * 4 },
+      uPixelRatio: { value: 1 },
+      uMaxFlux: { value: maxFlux },
+      uMaxSize: { value: maxSize },
+    },
+    transparent: true,
+    depthWrite: false,
+    blending: AdditiveBlending,
+  });
+}
+
+export { colourOf as starColour };
+
+class Cluster extends Shown {
   constructor(spec, material) {
-    this.spec = spec;
-    this.world = deepObjectWorld(spec);
-    this.radiusKm = spec.radiusPc * PC_KM;
-    this.points = new Points(buildCluster(spec), material);
+    super(spec);
+    this.material = material;
+    this.points = null;
+  }
+
+  build() {
+    if (this.points) return;
+    this.points = new Points(buildCluster(this.spec), this.material);
     this.points.renderOrder = 3;
-    this.group = new Group();
+    this.points.frustumCulled = false;
     this.group.add(this.points);
-    this.group.scale.setScalar(this.radiusKm);
+  }
+
+  release() {
+    if (!this.points) return;
+    this.group.remove(this.points);
+    this.points.geometry.dispose();
+    this.points = null;
   }
 }
 
@@ -733,24 +1033,73 @@ class NeutronStar {
 
 // --------------------------------------------------------------------- all
 
-export function createDeepObjects() {
+/**
+ * The hand-made list, then whatever of the catalogue it does not already
+ * cover. A catalogue entry is dropped when it sits inside a curated object of
+ * the same family, which is how the Orion Nebula is not also drawn a second
+ * time as the WISE H II region G209.0-19.4 on top of itself.
+ */
+function mergeCatalogue(curated, catalogue, family, dress = (s) => s) {
+  const out = curated.map((spec) => ({ ...spec, curated: true }));
+  const keys = new Set(out.map((s) => s.key));
+  const placed = out.map((s) => ({ world: deepObjectWorld(s), r: s.radiusPc * PC_KM, family: family(s) }));
+  const at = new Vector3();
+  for (const entry of catalogue) {
+    if (keys.has(entry.key) || !(entry.radiusPc > 0) || !(entry.distPc > 0)) continue;
+    deepObjectWorld(entry, at);
+    const r = entry.radiusPc * PC_KM;
+    const kind = family(entry);
+    if (placed.some((p) => p.family === kind && p.world.distanceTo(at) < (p.r + r) * 0.7)) continue;
+    keys.add(entry.key);
+    out.push(dress(entry));
+  }
+  return out;
+}
+
+/** How many of each are drawn at once, the largest on screen first. */
+const NEBULA_DRAWS = 24;
+const CLUSTER_DRAWS = 36;
+/** Frames a cluster's stars are kept after it was last drawn. */
+const CLUSTER_KEEP = 900;
+
+export function createDeepObjects(catalogue = {}) {
   const group = new Group();
   const noise = noiseTexture();
   const sphere = new SphereGeometry(1, 48, 24);
-  const nebulae = new Map(NEBULAE.map((spec) => [`neb:${spec.key}`, new Nebula(spec, noise, sphere)]));
-  const clusterMaterial = new ShaderMaterial({
-    vertexShader: CLUSTER_VERTEX,
-    fragmentShader: CLUSTER_FRAGMENT,
-    uniforms: { uGain: { value: 1.17 }, uPixelRatio: { value: 1 } },
-    transparent: true,
-    depthWrite: false,
-    blending: AdditiveBlending,
-  });
-  const clusters = new Map(CLUSTERS.map((spec) => [`cl:${spec.key}`, new Cluster(spec, clusterMaterial)]));
+  const clusterMaterial = starPointsMaterial();
+  const nebulaSpecs = mergeCatalogue(
+    NEBULAE,
+    catalogue.nebulae ?? [],
+    (s) => (s.type === 'planetary' ? 'pn' : 'cloud'),
+    dressNebula,
+  );
+  const clusterSpecs = mergeCatalogue(CLUSTERS, catalogue.clusters ?? [], (s) => s.type);
+  const nebulae = new Map(nebulaSpecs.map((spec) => [`neb:${spec.key}`, new Nebula(spec, noise, sphere, clusterMaterial)]));
+  const clusters = new Map(clusterSpecs.map((spec) => [`cl:${spec.key}`, new Cluster(spec, clusterMaterial)]));
   const neutronStars = new Map(NEUTRON_STARS.map((spec) => [`ns:${spec.key}`, new NeutronStar(spec)]));
-  for (const item of [...nebulae.values(), ...clusters.values(), ...neutronStars.values()]) group.add(item.group);
+  for (const item of neutronStars.values()) group.add(item.group);
+  const nebulaList = [...nebulae.values()];
+  const clusterList = [...clusters.values()];
 
   const local = new Vector3();
+  const drawn = [];
+  let frame = 0;
+
+  /** The `limit` largest of `items` on screen, by apparent pixel radius. */
+  function largest(items, cameraWorld, pixelsPerRadian, minPx, limit) {
+    drawn.length = 0;
+    for (const item of items) {
+      const px = (item.radiusKm / Math.max(cameraWorld.distanceTo(item.world), item.radiusKm)) * pixelsPerRadian;
+      item.px = px;
+      if (px > minPx) drawn.push(item);
+    }
+    if (drawn.length > limit) {
+      drawn.sort((a, b) => b.px - a.px);
+      drawn.length = limit;
+    }
+    return drawn;
+  }
+
   return {
     group,
     nebulae,
@@ -810,12 +1159,33 @@ export function createDeepObjects() {
       // A zeroth-magnitude star is 1.17 Suns at a parsec; the rest is the same
       // headroom the star field is drawn with.
       clusterMaterial.uniforms.uGain.value = 1.17 * 4 * exposure;
-      for (const nebula of nebulae.values()) {
+      frame++;
+
+      for (const nebula of nebulaList) nebula.measure(cameraWorld.distanceTo(nebula.world));
+      // Below a couple of pixels there is nothing to march.
+      const nebulaeDrawn = new Set(largest(nebulaList, cameraWorld, pixelsPerRadian, 1.5, NEBULA_DRAWS));
+      for (const nebula of nebulaList) {
+        const on = nebulaeDrawn.has(nebula);
+        nebula.show(group, on, frame);
+        if (!on) continue;
         place(nebula.group, nebula.world);
         local.copy(cameraWorld).sub(nebula.world);
-        nebula.update(local, local.length(), pixelsPerRadian, steps);
+        nebula.update(local, pixelsPerRadian, steps);
       }
-      for (const cluster of clusters.values()) place(cluster.group, cluster.world);
+
+      // A cluster is drawn star by star once it is a few pixels across; until
+      // then its light is too spread to show.
+      const clustersDrawn = new Set(largest(clusterList, cameraWorld, pixelsPerRadian, 2.5, CLUSTER_DRAWS));
+      for (const cluster of clusterList) {
+        const on = clustersDrawn.has(cluster);
+        cluster.show(group, on, frame);
+        if (on) {
+          cluster.build();
+          place(cluster.group, cluster.world);
+        } else if (cluster.points && frame - cluster.shownAt > CLUSTER_KEEP) {
+          cluster.release();
+        }
+      }
       for (const star of neutronStars.values()) {
         place(star.group, star.world);
         star.update(time, cameraWorld.distanceTo(star.world), cameraQuaternion);

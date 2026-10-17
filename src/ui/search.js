@@ -86,9 +86,16 @@ export function createSearch({ destinations, liveDestinations, resolve, craftSta
   let rows = [];
   let cursor = 0;
 
+  function parsecs(pc) {
+    if (pc >= 1e9) return `${(pc / 1e9).toFixed(2)} Gpc`;
+    if (pc >= 1e6) return `${(pc / 1e6).toFixed(1)} Mpc`;
+    if (pc >= 1e4) return `${(pc / 1e3).toFixed(1)} kpc`;
+    return `${pc.toFixed(1)} pc`;
+  }
+
   function distanceLabel(dest) {
-    if (dest.distPc) return `${dest.distPc.toFixed(1)} pc`;
-    if (dest.distMpc) return `${dest.distMpc.toFixed(1)} Mpc`;
+    if (dest.distPc) return parsecs(dest.distPc);
+    if (dest.distMpc) return parsecs(dest.distMpc * 1e6);
     if (dest.system?.distPc) return `${dest.system.distPc.toFixed(1)} pc`;
     // For solar system bodies the useful number is how far away it is right now,
     // which only the live scene knows.

@@ -1,12 +1,17 @@
 import {
   AdditiveBlending,
   BackSide,
+  BufferGeometry,
   Color,
+  CylinderGeometry,
+  DoubleSide,
+  Float32BufferAttribute,
   Group,
   Matrix3,
   Matrix4,
   Mesh,
   PlaneGeometry,
+  Points,
   ShaderMaterial,
   Sphere,
   SphereGeometry,
@@ -16,6 +21,7 @@ import { AU_KM, equatorialToEcliptic, PC_KM } from './units.js';
 import { equatorialToVector } from '../astro.js';
 import { platform } from './platform.js';
 import { pointGlare, pointVisibility } from './star.js';
+import { starColour, starPointsMaterial } from './deep-objects.js';
 
 /** Schwarzschild radius of one solar mass, km. */
 export const RS_KM_PER_SOL = 2.953;
@@ -23,45 +29,91 @@ export const RS_KM_PER_SOL = 2.953;
 /** The render layer hole volumes live on, so the main pass leaves them out. */
 export const BLACK_HOLE_LAYER = 2;
 
+/** Comoving distance to redshift z in parsecs, flat, H0 = 70, Omega_m = 0.3. */
+export function comovingPc(z) {
+  const steps = 600;
+  let sum = 0;
+  for (let i = 0; i < steps; i++) {
+    const zi = ((i + 0.5) / steps) * z;
+    sum += 1 / Math.sqrt(0.3 * (1 + zi) ** 3 + 0.7);
+  }
+  return (299792.458 / 70) * sum * (z / steps) * 1e6;
+}
+
+/*
+ * Disk palettes. A disk's true colour is a blackbody, which for every real
+ * hole is somewhere between amber and blue-white; these are the looks the
+ * renders of them are known by — a dusty red torus round a quasar, the
+ * violet of a hot corona, the gold of the EHT's M87* — laid over that.
+ * `tint` is how far over: 0 leaves the physics alone.
+ */
+export const HOLE_PALETTES = {
+  thermal: { inner: [1, 0.9, 0.75], outer: [1, 0.55, 0.2], tint: 0 },
+  ember: { inner: [1.0, 0.82, 0.55], outer: [0.95, 0.12, 0.05], tint: 0.85, torus: [0.8, 0.12, 0.05] },
+  gold: { inner: [1.0, 0.95, 0.75], outer: [1.0, 0.55, 0.12], tint: 0.8 },
+  violet: { inner: [0.85, 0.9, 1.0], outer: [0.55, 0.2, 1.0], tint: 0.85, torus: [0.4, 0.15, 0.8] },
+  magenta: { inner: [1.0, 0.85, 0.95], outer: [0.95, 0.15, 0.6], tint: 0.85 },
+  cyan: { inner: [0.9, 1.0, 1.0], outer: [0.15, 0.6, 1.0], tint: 0.85, torus: [0.1, 0.35, 0.8] },
+  sunset: { inner: [1.0, 0.95, 0.8], outer: [1.0, 0.3, 0.45], tint: 0.8, torus: [0.7, 0.15, 0.3] },
+};
+
 /**
  * Catalogued holes at measured sky positions. Masses set the event-horizon
  * size; the same mesh shader is used for a stellar-mass binary and for M87*.
+ *
+ * Distances to the quasars are comoving, where they are now, from their
+ * redshift. `host` names the galaxy a supermassive hole sits at the heart of,
+ * and puts it exactly at that galaxy's catalogued centre. `jetPc` is how far
+ * its jets reach; `companion` is the star feeding (or simply orbiting) a
+ * stellar-mass hole, from the measured orbit.
  */
 export const BLACK_HOLES = [
-  {
-    key: 'sgr-a',
-    name: 'Sagittarius A*',
-    ra: 266.41684,
-    dec: -29.00781,
-    distPc: 8178,
-    massSol: 4.3e6,
-    spin: 0.94,
-    inclinationDeg: 74,
-    jet: 0,
-  },
-  {
-    key: 'cygnus-x1',
-    name: 'Cygnus X-1',
-    ra: 299.5903,
-    dec: 35.20173,
-    distPc: 2240,
-    massSol: 21.2,
-    spin: 0.97,
-    inclinationDeg: 27,
-    jet: 0,
-  },
-  {
-    key: 'm87-star',
-    name: 'M87*',
-    ra: 187.70593,
-    dec: 12.39112,
-    distPc: 16.8e6,
-    massSol: 6.5e9,
-    spin: 0.9,
-    inclinationDeg: 17,
-    jet: 1,
-  },
+  { key: 'sgr-a', name: 'Sagittarius A*', ra: 266.41684, dec: -29.00781, distPc: 8178, massSol: 4.3e6, spin: 0.94, inclinationDeg: 74, jet: 0, palette: 'thermal', activity: 'Quiescent' },
+  { key: 'cygnus-x1', name: 'Cygnus X-1', ra: 299.5903, dec: 35.20173, distPc: 2240, massSol: 21.2, spin: 0.97, inclinationDeg: 27, jet: 1, jetPc: 0.05, palette: 'cyan', activity: 'X-ray binary', companion: { name: 'HDE 226868', sepAu: 0.2, teff: 31000, lum: 3.5e5 } },
+  { key: 'm87-star', name: 'M87*', host: 'NGC 4486', ra: 187.70593, dec: 12.39112, distPc: 16.8e6, massSol: 6.5e9, spin: 0.9, inclinationDeg: 17, jet: 1, jetPc: 1500, palette: 'gold', activity: 'Radio galaxy' },
+
+  // The largest and the brightest.
+  { key: 'ton618', name: 'TON 618', ra: 187.1046, dec: 31.4772, z: 2.219, massSol: 4.07e10, spin: 0.95, inclinationDeg: 28, jet: 1, jetPc: 8000, palette: 'ember', activity: 'Quasar', brightness: 1.4, diskOuterRs: 27 },
+  { key: 's5-0014', name: 'S5 0014+81', ra: 4.2854, dec: 81.5856, z: 3.366, massSol: 4e10, spin: 0.9, inclinationDeg: 12, jet: 1, jetPc: 6000, palette: 'cyan', activity: 'Quasar', brightness: 1.4 },
+  { key: 'apm08279', name: 'APM 08279+5255', ra: 127.924, dec: 52.7548, z: 3.911, massSol: 1e10, spin: 0.9, inclinationDeg: 35, jet: 0, palette: 'gold', activity: 'Quasar', brightness: 1.3 },
+  { key: 'sdss-j0100', name: 'SDSS J0100+2802', ra: 15.0543, dec: 28.0405, z: 6.3, massSol: 1.2e10, spin: 0.9, inclinationDeg: 40, jet: 0, palette: 'violet', activity: 'Quasar', brightness: 1.3 },
+  { key: 'ulas-j1342', name: 'ULAS J1342+0928', ra: 205.5338, dec: 9.4774, z: 7.54, massSol: 8e8, spin: 0.8, inclinationDeg: 50, jet: 0, palette: 'sunset', activity: 'Quasar' },
+  { key: 'j0313', name: 'J0313\u22121806', ra: 48.4327, dec: -18.1031, z: 7.64, massSol: 1.6e9, spin: 0.8, inclinationDeg: 45, jet: 0, palette: 'magenta', activity: 'Quasar' },
+  { key: '3c273', name: '3C 273', ra: 187.2779, dec: 2.0524, z: 0.158, massSol: 8.9e8, spin: 0.9, inclinationDeg: 20, jet: 1, jetPc: 40000, palette: 'violet', activity: 'Quasar', brightness: 1.2 },
+  { key: 'oj287', name: 'OJ 287', ra: 133.7036, dec: 20.1085, z: 0.306, massSol: 1.8e10, spin: 0.38, inclinationDeg: 8, jet: 1, jetPc: 5000, palette: 'magenta', activity: 'Blazar' },
+  { key: 'phoenix-a', name: 'Phoenix A', host: 'Phoenix Cluster BCG', ra: 356.183, dec: -42.7203, z: 0.597, massSol: 1e11, spin: 0.8, inclinationDeg: 60, jet: 1, jetPc: 20000, palette: 'ember', activity: 'Active' },
+  { key: 'holm15a', name: 'Holmberg 15A*', host: 'Holmberg 15A', ra: 10.46, dec: -9.3031, distPc: 2.34e8, massSol: 4e10, spin: 0.7, inclinationDeg: 55, jet: 0, palette: 'sunset', activity: 'Quiescent', brightness: 0.35 },
+  { key: 'ic1101', name: 'IC 1101*', host: 'IC 1101', ra: 227.7004, dec: 5.7334, distPc: 3.36e8, massSol: 4e10, spin: 0.7, inclinationDeg: 65, jet: 0, palette: 'ember', activity: 'Quiescent', brightness: 0.3 },
+  { key: 'ngc4889', name: 'NGC 4889*', host: 'NGC 4884', ra: 195.0338, dec: 27.977, distPc: 1.05e8, massSol: 2.1e10, spin: 0.7, inclinationDeg: 40, jet: 0, palette: 'violet', activity: 'Quiescent', brightness: 0.3 },
+  { key: 'ngc1600', name: 'NGC 1600*', host: 'NGC 1600', ra: 67.9162, dec: -5.0878, distPc: 6.64e7, massSol: 1.7e10, spin: 0.7, inclinationDeg: 70, jet: 0, palette: 'gold', activity: 'Quiescent', brightness: 0.3 },
+  { key: 'ngc1277', name: 'NGC 1277*', host: 'NGC 1277', ra: 49.9661, dec: 41.5736, distPc: 6.89e7, massSol: 4.9e9, spin: 0.7, inclinationDeg: 50, jet: 0, palette: 'magenta', activity: 'Quiescent', brightness: 0.3 },
+  { key: 'cyg-a', name: 'Cygnus A*', host: 'Cygnus A', ra: 299.8682, dec: 40.7339, distPc: 2.37e8, massSol: 2.5e9, spin: 0.9, inclinationDeg: 80, jet: 1, jetPc: 70000, palette: 'sunset', activity: 'Radio galaxy' },
+
+  // Nearby galaxies' own.
+  { key: 'm31-star', name: 'M31*', host: 'NGC 224', ra: 10.6847, dec: 41.2692, distPc: 7.7e5, massSol: 1.4e8, spin: 0.6, inclinationDeg: 77, jet: 0, palette: 'thermal', activity: 'Quiescent', brightness: 0.4 },
+  { key: 'm104-star', name: 'Sombrero Galaxy*', host: 'NGC 4594', ra: 189.9976, dec: -11.6231, distPc: 9.3e6, massSol: 1e9, spin: 0.7, inclinationDeg: 84, jet: 0, palette: 'gold', activity: 'LINER', brightness: 0.6 },
+  { key: 'cen-a-star', name: 'Centaurus A*', host: 'NGC 5128', ra: 201.3654, dec: -43.0191, distPc: 3.75e6, massSol: 5.5e7, spin: 0.8, inclinationDeg: 60, jet: 1, jetPc: 4000, palette: 'ember', activity: 'Radio galaxy' },
+  { key: 'm106-star', name: 'M106*', host: 'NGC 4258', ra: 184.7396, dec: 47.3039, distPc: 7.83e6, massSol: 3.9e7, spin: 0.7, inclinationDeg: 82, jet: 1, jetPc: 300, palette: 'cyan', activity: 'Seyfert' },
+  { key: 'm81-star', name: 'M81*', host: 'NGC 3031', ra: 148.8882, dec: 69.0653, distPc: 3.63e6, massSol: 7e7, spin: 0.6, inclinationDeg: 30, jet: 0, palette: 'sunset', activity: 'LINER', brightness: 0.6 },
+  { key: 'ngc4151-star', name: 'NGC 4151*', host: 'NGC 4151', ra: 182.6357, dec: 39.4057, distPc: 1.58e7, massSol: 4.5e7, spin: 0.8, inclinationDeg: 45, jet: 0, palette: 'violet', activity: 'Seyfert' },
+
+  // Stellar-mass: X-ray binaries, microquasars, and the dormant ones Gaia
+  // found only by the wobble of the star going round them.
+  { key: 'v404-cyg', name: 'V404 Cygni', ra: 306.0159, dec: 33.8672, distPc: 2390, massSol: 9, spin: 0.9, inclinationDeg: 67, jet: 1, jetPc: 0.02, palette: 'ember', activity: 'X-ray binary', companion: { name: 'V404 Cygni companion', sepAu: 0.15, teff: 4300, lum: 8 } },
+  { key: 'gro-j1655', name: 'GRO J1655\u221240', ra: 253.5005, dec: -39.8458, distPc: 3200, massSol: 6.3, spin: 0.7, inclinationDeg: 70, jet: 1, jetPc: 0.03, palette: 'violet', activity: 'Microquasar', companion: { name: 'V1033 Scorpii', sepAu: 0.08, teff: 6300, lum: 30 } },
+  { key: 'a0620', name: 'A0620\u221200', ra: 95.6855, dec: -0.3456, distPc: 1060, massSol: 6.6, spin: 0.12, inclinationDeg: 51, jet: 0, palette: 'sunset', activity: 'X-ray binary', brightness: 0.4, companion: { name: 'V616 Monocerotis', sepAu: 0.02, teff: 4400, lum: 0.3 } },
+  { key: 'grs1915', name: 'GRS 1915+105', ra: 288.7983, dec: 10.9458, distPc: 8600, massSol: 12.4, spin: 0.98, inclinationDeg: 60, jet: 1, jetPc: 0.08, palette: 'cyan', activity: 'Microquasar', companion: { name: 'V1487 Aquilae', sepAu: 0.5, teff: 4800, lum: 20 } },
+  { key: 'ss433', name: 'SS 433', ra: 287.9565, dec: 4.9827, distPc: 5500, massSol: 10, spin: 0.8, inclinationDeg: 78, jet: 1, jetPc: 0.3, palette: 'magenta', activity: 'Microquasar', companion: { name: 'SS 433 A', sepAu: 0.3, teff: 8500, lum: 4e4 } },
+  { key: 'maxi-j1820', name: 'MAXI J1820+070', ra: 275.0914, dec: 7.1854, distPc: 2960, massSol: 8.5, spin: 0.2, inclinationDeg: 64, jet: 1, jetPc: 0.03, palette: 'gold', activity: 'X-ray binary', companion: { name: 'MAXI J1820+070 companion', sepAu: 0.03, teff: 4200, lum: 0.4 } },
+  { key: 'gx339', name: 'GX 339\u22124', ra: 255.7058, dec: -48.7897, distPc: 8000, massSol: 6, spin: 0.9, inclinationDeg: 40, jet: 1, jetPc: 0.03, palette: 'violet', activity: 'Microquasar' },
+  { key: 'xte-j1118', name: 'XTE J1118+480', ra: 169.5452, dec: 48.0367, distPc: 1700, massSol: 7.3, spin: 0.3, inclinationDeg: 68, jet: 0, palette: 'ember', activity: 'X-ray binary', brightness: 0.5, companion: { name: 'KV Ursae Majoris', sepAu: 0.012, teff: 4300, lum: 0.2 } },
+  { key: 'lmc-x1', name: 'LMC X-1', ra: 84.9113, dec: -69.7433, distPc: 49970, massSol: 10.9, spin: 0.92, inclinationDeg: 36, jet: 0, palette: 'cyan', activity: 'X-ray binary', companion: { name: 'LMC X-1 companion', sepAu: 0.17, teff: 33000, lum: 2e5 } },
+  { key: 'm33-x7', name: 'M33 X-7', ra: 23.392, dec: 30.5366, distPc: 8.4e5, massSol: 15.65, spin: 0.84, inclinationDeg: 75, jet: 0, palette: 'violet', activity: 'X-ray binary', companion: { name: 'M33 X-7 companion', sepAu: 0.2, teff: 35000, lum: 4e5 } },
+  { key: 'gaia-bh1', name: 'Gaia BH1', ra: 262.1712, dec: -0.5808, distPc: 480, massSol: 9.6, spin: 0.5, inclinationDeg: 60, jet: 0, palette: 'thermal', activity: 'Dormant', brightness: 0.05, companion: { name: 'Gaia BH1 star', sepAu: 1.4, teff: 5850, lum: 1.1 } },
+  { key: 'gaia-bh2', name: 'Gaia BH2', ra: 207.5704, dec: -59.2399, distPc: 1160, massSol: 8.9, spin: 0.5, inclinationDeg: 35, jet: 0, palette: 'thermal', activity: 'Dormant', brightness: 0.05, companion: { name: 'Gaia BH2 star', sepAu: 4.96, teff: 4600, lum: 25 } },
+  { key: 'gaia-bh3', name: 'Gaia BH3', ra: 294.8268, dec: 14.9306, distPc: 590, massSol: 33, spin: 0.5, inclinationDeg: 80, jet: 0, palette: 'thermal', activity: 'Dormant', brightness: 0.05, companion: { name: 'Gaia BH3 star', sepAu: 16, teff: 5200, lum: 15 } },
 ];
+for (const spec of BLACK_HOLES) if (spec.z && !spec.distPc) spec.distPc = comovingPc(spec.z);
 
 export function schwarzschildKm(massSol) {
   return RS_KM_PER_SOL * massSol;
@@ -117,6 +169,11 @@ const VOLUME_FRAGMENT = /* glsl */ `
   uniform float uCoreTempK;
   uniform float uRimTempK;
   uniform float uDiskOut;  // rs, outer edge of the disk
+  uniform vec3 uInner;     // palette, inner edge
+  uniform vec3 uOuter;     // palette, rim
+  uniform float uTint;     // how far the palette replaces the blackbody
+  uniform vec3 uTorus;     // a dusty ring past the disk's edge, black for none
+  uniform vec3 uJetColour;
   uniform sampler2D tBehind;   // the frame as drawn before any hole, linear HDR
   uniform float uLens;
   uniform mat3 uLocalToView;
@@ -213,6 +270,13 @@ const VOLUME_FRAGMENT = /* glsl */ `
     // The tone curve pulls bright colours towards white; this puts back what
     // it takes, so a 4000 K rim still reads as amber once it is exposed.
     c = max(mix(vec3(dot(c, vec3(0.2126, 0.7152, 0.0722))), c, 1.45), 0.0);
+    if (uTint > 0.0) {
+      // The palette, still shifted bluer where the gas comes towards you and
+      // redder where it goes away, so the beaming reads the same.
+      vec3 pal = mix(uOuter, uInner, pow(ramp, 1.3));
+      vec3 dop = blackbody(6500.0 * shift) / vec3(1.0, 0.97, 0.94);
+      c = mix(c, pal * mix(vec3(1.0), dop, 0.55), uTint);
+    }
     // Hotter annuli are brighter too. Stefan-Boltzmann's fourth power would
     // leave nothing visible but the innermost ring, so this is much gentler.
     return c * (0.22 + 1.6 * ramp * ramp * ramp);
@@ -301,6 +365,18 @@ const VOLUME_FRAGMENT = /* glsl */ `
           colour += emit * (1.0 - alpha);
           alpha += clamp(dens * 0.7, 0.0, 1.0) * (1.0 - alpha);
         }
+        // The torus: cool dust and gas beyond the disk, glowing dull red or
+        // violet in the light of the hot centre, clumped rather than smooth.
+        float edge = rho / uDiskOut;
+        if (edge > 0.75 && edge < 1.9 && dot(uTorus, uTorus) > 0.0) {
+          float phi = atan(hit.z, hit.x);
+          float u = phi / 6.2831853 + uTime * 0.7 / pow(rho, 1.5);
+          float clump = ringNoise(vec2(u * 18.0 + log(rho) * 6.0, log(rho) * 9.0), 18.0) * 0.6
+                      + ringNoise(vec2(u * 44.0, log(rho) * 22.0), 44.0) * 0.4;
+          float band = smoothstep(0.75, 1.05, edge) * smoothstep(1.9, 1.25, edge) * smoothstep(0.25, 0.85, clump);
+          colour += uTorus * band * 0.35 * uBrightness * (1.0 - alpha);
+          alpha += band * 0.25 * (1.0 - alpha);
+        }
       }
 
       // Bipolar jet. Drawn as a hollow cone rather than a filled one: a real
@@ -317,7 +393,7 @@ const VOLUME_FRAGMENT = /* glsl */ `
         float flicker = 0.7 + 0.3 * noise(vec2(height * 0.5 - uTime * 1.1, rho * 0.8));
         float jet = sheath * along * flicker;
         if (jet > 0.001) {
-          colour += vec3(0.55, 0.78, 1.3) * jet * 0.28 * sqrt(uBrightness) * step * (1.0 - alpha);
+          colour += uJetColour * jet * 0.28 * sqrt(uBrightness) * step * (1.0 - alpha);
           alpha += jet * step * 0.02 * (1.0 - alpha);
         }
       }
@@ -385,6 +461,92 @@ const GLARE_FRAGMENT = /* glsl */ `
   }
 `;
 
+const JET_VERTEX = /* glsl */ `
+  #include <common>
+  #include <logdepthbuf_pars_vertex>
+  varying float vAlong;
+  varying float vFacing;
+  void main() {
+    vAlong = uv.y;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    vec3 n = normalize(normalMatrix * normal);
+    vFacing = abs(dot(n, normalize(-mv.xyz)));
+    gl_Position = projectionMatrix * mv;
+    #include <logdepthbuf_vertex>
+  }
+`;
+
+const JET_FRAGMENT = /* glsl */ `
+  #include <common>
+  #include <logdepthbuf_pars_fragment>
+  uniform vec3 uColour;
+  uniform float uIntensity;
+  uniform float uTime;
+  uniform float uSeed;
+  varying float vAlong;
+  varying float vFacing;
+  float hash(float x) { return fract(sin(x * 127.1 + uSeed) * 43758.5453); }
+  float noise(float x) {
+    float i = floor(x), f = fract(x);
+    return mix(hash(i), hash(i + 1.0), f * f * (3.0 - 2.0 * f));
+  }
+  void main() {
+    // Brightest at the base, knotted along its length where shocks run out
+    // through it, and a hot spot where it ends against the gas outside.
+    float fall = pow(1.0 - vAlong, 1.6) * 0.8 + 0.2 * exp(-pow((vAlong - 0.97) * 30.0, 2.0)) * 6.0;
+    float knots = 0.55 + 0.9 * pow(noise(vAlong * 38.0 - uTime * 0.05), 3.0);
+    float sheath = 0.3 + 0.7 * pow(1.0 - vFacing, 2.0);
+    float fade = smoothstep(0.0, 0.003, vAlong) * smoothstep(1.0, 0.985, vAlong);
+    gl_FragColor = vec4(uColour * fall * knots * sheath * fade * uIntensity * 0.6, 1.0);
+    #include <logdepthbuf_fragment>
+  }
+`;
+
+/** Stars in the swarm round a supermassive hole. */
+export const ORBITING_STARS = 120;
+
+/** G times a solar mass, km³ s⁻². */
+const GM_SUN_KM3S2 = 1.32712440018e11;
+
+const PALETTE_NAMES = Object.keys(HOLE_PALETTES);
+
+function hashKey(key) {
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) h = Math.imul(h ^ key.charCodeAt(i), 16777619);
+  return h >>> 0;
+}
+
+function seeded(seed) {
+  let s = seed >>> 0 || 1;
+  return () => {
+    s = (s + 0x6d2b79f5) >>> 0;
+    let t = s;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** Orbit axes in the disk's plane, which is the hole frame's xz. */
+function discBasis() {
+  return [[1, 0, 0], [0, 0, 1]];
+}
+
+/** Two perpendicular unit vectors in a random plane. */
+function randomBasis(rnd) {
+  const z = rnd() * 2 - 1;
+  const phi = rnd() * Math.PI * 2;
+  const s = Math.sqrt(1 - z * z);
+  const n = new Vector3(s * Math.cos(phi), z, s * Math.sin(phi));
+  const p = new Vector3(1, 0, 0).cross(n);
+  if (p.lengthSq() < 1e-6) p.set(0, 1, 0).cross(n);
+  p.normalize().applyAxisAngle(n, rnd() * Math.PI * 2);
+  const q = new Vector3().crossVectors(n, p);
+  return [p.toArray(), q.toArray()];
+}
+
+const mixColour = (a, b, t) => a.map((x, i) => x + (b[i] - x) * t);
+
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
 /** Solar luminosities a hole of this mass puts out accreting at its limit. */
@@ -412,6 +574,13 @@ export class BlackHole {
     this.group.rotateX(((spec.inclinationDeg ?? 70) * Math.PI) / 180);
     this.group.updateMatrix();
 
+    // A generated hole picks a look of its own from its key, so the holes of
+    // invented galaxies are not all the one amber.
+    const paletteName = spec.palette ?? PALETTE_NAMES[hashKey(spec.key ?? '') % PALETTE_NAMES.length];
+    const palette = HOLE_PALETTES[paletteName] ?? HOLE_PALETTES.thermal;
+    // Synchrotron blue, with a little of the disk's colour in it.
+    const jetColour = palette.tint > 0 ? mixColour(palette.outer, [0.45, 0.7, 1.4], 0.8) : [0.55, 0.78, 1.3];
+
     const geometry = new SphereGeometry(this.outerKm, 48, 32);
     geometry.boundingSphere = new Sphere(new Vector3(), this.outerKm);
     this.material = new ShaderMaterial({
@@ -425,6 +594,11 @@ export class BlackHole {
         uCoreTempK: { value: this.coreTempK },
         uRimTempK: { value: this.rimTempK },
         uDiskOut: { value: spec.diskOuterRs ?? 24 },
+        uInner: { value: new Vector3(...palette.inner) },
+        uOuter: { value: new Vector3(...palette.outer) },
+        uTint: { value: palette.tint },
+        uTorus: { value: new Vector3(...(palette.torus ?? [0, 0, 0])) },
+        uJetColour: { value: new Vector3(...jetColour) },
         tBehind: { value: null },
         uLens: { value: 0 },
         uLocalToView: { value: new Matrix3() },
@@ -481,6 +655,130 @@ export class BlackHole {
     // nothing and is found only by its lensing.
     this.luminositySol = eddingtonLuminositySol(spec.massSol) * (spec.brightness ?? 1) ** 2
       * (spec.activity === 'Quasar' ? 40 : 1);
+
+    this.jets = spec.jet && spec.jetPc ? this._buildJets(spec, jetColour) : null;
+    this.orbiters = this._buildOrbiters(spec);
+  }
+
+  /**
+   * The jets past the volume's edge, out to the lobes: a quasar's run for
+   * thousands of parsecs, a microquasar's for a fraction of one. They carry
+   * on from where the ray-marched sheath stops, at the same width.
+   */
+  _buildJets(spec, colour) {
+    const startKm = this.rs * 40;
+    const lengthKm = Math.max(spec.jetPc * PC_KM, startKm * 4);
+    const baseKm = this.rs * 2.7;
+    const endKm = baseKm + lengthKm * 0.012;
+    const geometry = new CylinderGeometry(endKm, baseKm, lengthKm, 24, 1, true);
+    geometry.translate(0, startKm + lengthKm / 2, 0);
+    const material = new ShaderMaterial({
+      vertexShader: JET_VERTEX,
+      fragmentShader: JET_FRAGMENT,
+      uniforms: {
+        uColour: { value: new Vector3(...colour) },
+        uIntensity: { value: 1 },
+        uTime: { value: 0 },
+        uSeed: { value: (hashKey(spec.key) % 997) / 97 },
+      },
+      transparent: true,
+      depthWrite: false,
+      blending: AdditiveBlending,
+      side: DoubleSide,
+    });
+    const group = new Group();
+    for (const sign of [1, -1]) {
+      const jet = new Mesh(geometry, material);
+      if (sign < 0) jet.rotation.x = Math.PI;
+      jet.frustumCulled = false;
+      jet.renderOrder = 5;
+      group.add(jet);
+    }
+    this.group.add(group);
+    return { group, material, lengthKm };
+  }
+
+  /**
+   * What goes round it. A supermassive hole has a swarm of stars on steep
+   * eccentric orbits, the way the S-stars go round Sagittarius A*; a
+   * stellar-mass one has the star it was found by. Kepler orbits, followed in
+   * the simulation's time, so speeding the clock up sets them going.
+   */
+  _buildOrbiters(spec) {
+    const rnd = seeded(hashKey(spec.key ?? 'hole'));
+    const orbits = [];
+    const gm = spec.massSol * GM_SUN_KM3S2;
+    if (spec.companion) {
+      const c = spec.companion;
+      const a = c.sepAu * AU_KM;
+      orbits.push({ a, e: 0.02, M0: rnd() * 6.283, n: Math.sqrt(gm / a ** 3), basis: discBasis(), teff: c.teff, lum: c.lum });
+    } else if (spec.massSol > 1e5) {
+      for (let i = 0; i < ORBITING_STARS; i++) {
+        // A few hundred to forty thousand horizon radii, log-uniform, and as
+        // eccentric as the S-stars, with no orbit diving inside the disk.
+        const a = this.rs * 400 * 100 ** rnd();
+        const e = Math.min(Math.sqrt(rnd()) * 0.97, 1 - (this.rs * 60) / a);
+        const early = rnd() < 0.7;
+        orbits.push({
+          a,
+          e: Math.max(e, 0),
+          M0: rnd() * 6.283,
+          n: Math.sqrt(gm / a ** 3),
+          basis: randomBasis(rnd),
+          teff: early ? 14000 + rnd() * 16000 : 3800 + rnd() * 1200,
+          lum: early ? 10 ** (3 + rnd() * 1.5) : 10 ** (2 + rnd()),
+        });
+      }
+    }
+    if (!orbits.length) return null;
+    const n = orbits.length;
+    const positions = new Float32Array(n * 3);
+    const colours = new Float32Array(n * 3);
+    const lum = new Float32Array(n);
+    orbits.forEach((o, i) => {
+      const [r, g, b] = starColour(o.teff);
+      colours.set([r, g, b], i * 3);
+      lum[i] = o.lum;
+    });
+    const geometry = new BufferGeometry();
+    const position = new Float32BufferAttribute(positions, 3);
+    position.setUsage(35048);
+    geometry.setAttribute('position', position);
+    geometry.setAttribute('color', new Float32BufferAttribute(colours, 3));
+    geometry.setAttribute('lum', new Float32BufferAttribute(lum, 1));
+    // A lone companion is the brightest thing in its sky and keeps its glare.
+    const material = spec.companion ? starPointsMaterial() : starPointsMaterial({ maxFlux: 60, maxSize: 11 });
+    const points = new Points(geometry, material);
+    points.frustumCulled = false;
+    points.renderOrder = 3;
+    // In the hole's own frame, scaled so the positions stay small numbers.
+    const holder = new Group();
+    holder.scale.setScalar(this.rs);
+    holder.add(points);
+    this.group.add(holder);
+    const reach = Math.max(...orbits.map((o) => o.a * (1 + o.e)));
+    return { orbits, points, position, material, reach };
+  }
+
+  _placeOrbiters(simSeconds) {
+    const { orbits, position } = this.orbiters;
+    const arr = position.array;
+    const inv = 1 / this.rs;
+    for (let i = 0; i < orbits.length; i++) {
+      const o = orbits[i];
+      // Mean anomaly wrapped before it reaches a float, then Kepler's
+      // equation by Newton's method.
+      const M = (o.M0 + ((o.n * simSeconds) % 6.283185307179586)) % 6.283185307179586;
+      let E = o.e < 0.8 ? M : Math.PI;
+      for (let k = 0; k < 8; k++) E -= (E - o.e * Math.sin(E) - M) / (1 - o.e * Math.cos(E));
+      const x = o.a * (Math.cos(E) - o.e) * inv;
+      const y = o.a * Math.sqrt(1 - o.e * o.e) * Math.sin(E) * inv;
+      const [P, Q] = o.basis;
+      arr[i * 3] = P[0] * x + Q[0] * y;
+      arr[i * 3 + 1] = P[1] * x + Q[1] * y;
+      arr[i * 3 + 2] = P[2] * x + Q[2] * y;
+    }
+    position.needsUpdate = true;
   }
 
   /** Hands the shader the frame drawn before it, to bend. */
@@ -501,12 +799,27 @@ export class BlackHole {
       .normalize();
   }
 
-  update({ cameraLocal, time, visible = true, pixelsPerRadian = 0, exposure = 1 }) {
+  update({ cameraLocal, time, simSeconds = 0, visible = true, pixelsPerRadian = 0, pixelRatio = 1, exposure = 1 }) {
     this.material.uniforms.uCameraLocal.value.copy(cameraLocal);
     this.material.uniforms.uTime.value = time;
     this.group.visible = visible;
 
     const distanceKm = Math.max(cameraLocal.length(), 1);
+    if (this.jets) {
+      // Out of sight once the whole jet is under a pixel long.
+      this.jets.group.visible = (this.jets.lengthKm / distanceKm) * pixelsPerRadian > 1;
+      this.jets.material.uniforms.uTime.value = time;
+      this.jets.material.uniforms.uIntensity.value = Math.sqrt(this.spec.brightness ?? 1);
+    }
+    if (this.orbiters) {
+      const near = distanceKm < this.orbiters.reach * 400;
+      this.orbiters.points.visible = near;
+      if (near && visible) {
+        this._placeOrbiters(simSeconds);
+        this.orbiters.material.uniforms.uGain.value = 1.17 * 4 * exposure;
+        this.orbiters.material.uniforms.uPixelRatio.value = pixelRatio;
+      }
+    }
     const volumePixels = pixelsPerRadian ? (this.outerKm / distanceKm) * pixelsPerRadian * 2 : Infinity;
     // Handed over between four and fourteen pixels, so the point does not sit
     // on top of a disk that has become big enough to draw itself.

@@ -20,6 +20,25 @@ import { BODY_BY_KEY } from '../engine/bodies-data.js';
 import { MOONS } from '../engine/moons-data.js';
 import { physicalFor, surfaceGravity, meanDensity, escapeVelocity } from '../engine/physical-data.js';
 
+/** How long light from redshift z has been travelling, for H0 = 70 and a flat Omega_m = 0.3. */
+export function lookbackGyr(z) {
+  const steps = 400;
+  let sum = 0;
+  for (let i = 0; i < steps; i++) {
+    const zi = ((i + 0.5) / steps) * z;
+    sum += 1 / ((1 + zi) * Math.sqrt(0.3 * (1 + zi) ** 3 + 0.7));
+  }
+  return 13.968 * sum * (z / steps);
+}
+
+/** Where a catalogue-only deep-sky object came from, by the prefix of its key. */
+const CATALOGUE_OF = {
+  oc: 'Gaia open cluster census (Cantat-Gaudin et al. 2020)',
+  gc: 'Harris globular cluster catalogue',
+  pn: 'Gaia planetary nebula distances (Chornay & Walton 2021)',
+  hii: 'WISE catalogue of H II regions (Anderson et al. 2014)',
+};
+
 const num = (value, digits = 0) =>
   value.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
 
@@ -159,7 +178,14 @@ export function describe(resolved, context = {}) {
     const g = galaxyRecord;
     const mpc = g?.d ?? 0;
     add('Type', g?.morph ? `Galaxy \u00b7 ${g.morph}` : 'Galaxy', true);
-    if (mpc) {
+    if (g?.note) add('Note', g.note, true);
+    if (g?.z > 0.1) {
+      // Far enough that the universe expanded on the way: the distance is
+      // where it is now, not how long its light took.
+      add('Redshift', `z = ${num(g.z, g.z < 1 ? 3 : 2)}`);
+      add('Distance now', `${num(mpc / 1000, 2)} Gpc \u00b7 ${num(mpc * 3.26156e-3, 1)} billion ly`);
+      add('Light travel', `${num(lookbackGyr(g.z), 2)} billion years`);
+    } else if (mpc) {
       add('Light travel', `${num(mpc * 3.26156, 2)} Mly`);
       // Hubble flow only; meaningless for the Local Group members, so it is
       // suppressed where peculiar motion dominates.
@@ -224,18 +250,27 @@ export function describe(resolved, context = {}) {
   if (resolved.kind === 'black-hole') {
     const s = resolved.spec;
     const rs = s.massSol * 2.953;
-    add('Class', s.massSol > 1e5 ? 'Supermassive black hole' : 'Stellar-mass black hole', true);
-    add('Mass', s.massSol >= 1e6 ? `${num(s.massSol / 1e6, 2)} \u00d7 10\u2076 M\u2609` : `${num(s.massSol, 1)} M\u2609`);
+    add('Class', s.massSol >= 1e10 ? 'Ultramassive black hole' : s.massSol > 1e5 ? 'Supermassive black hole' : 'Stellar-mass black hole', true);
+    add('Mass', s.massSol >= 1e9
+      ? `${num(s.massSol / 1e9, 2)} \u00d7 10\u2079 M\u2609`
+      : s.massSol >= 1e6 ? `${num(s.massSol / 1e6, 2)} \u00d7 10\u2076 M\u2609` : `${num(s.massSol, 1)} M\u2609`);
     add('Schwarzschild radius', formatDistance(rs));
     // The photon sphere and the innermost stable circular orbit are the two
     // radii you can actually see the effect of in the render.
     add('Photon sphere', formatDistance(rs * 1.5));
     add('Spin', `a\u002f\u004d = ${num(s.spin, 2)}`);
     add('Activity', s.activity, true);
+    if (s.host) add('Host galaxy', s.host, true);
+    if (s.z) {
+      add('Redshift', `z = ${num(s.z, 3)}`);
+      add('Light travel', `${num(lookbackGyr(s.z), 2)} billion years`);
+    }
+    if (s.companion) add('Companion', `${s.companion.name}, ${num(s.companion.sepAu, s.companion.sepAu < 1 ? 2 : 1)} au out`, true);
+    else if (s.massSol > 1e5) add('Orbited by', '120 stars on eccentric orbits, like the S-stars of Sagittarius A*', true);
     if (s.generated) add('Data', GENERATED, true);
     return {
       title: resolved.name,
-      className: s.massSol > 1e5 ? 'Supermassive black hole' : 'Black hole',
+      className: s.massSol >= 1e10 ? 'Ultramassive black hole' : s.massSol > 1e5 ? 'Supermassive black hole' : 'Black hole',
       kind: 'black-hole',
       rows,
     };
@@ -245,6 +280,7 @@ export function describe(resolved, context = {}) {
     const s = resolved.spec;
     const className = resolved.dest?.detail ?? 'Deep-sky object';
     add('Class', className, true);
+    if (s.alt) add('Also known as', s.alt, true);
     add('Distance from Sun', `${num(s.distPc, 0)} pc \u00b7 ${num(s.distPc * 3.26156, 0)} ly`);
     if (s.radiusPc) add('Radius', `${num(s.radiusPc * 3.26156, s.radiusPc < 1 ? 2 : 0)} ly`);
     if (s.stars) add('Stars drawn', num(s.stars));
@@ -254,7 +290,8 @@ export function describe(resolved, context = {}) {
       add('Spin period', s.periodS < 1 ? `${num(s.periodS * 1000, 2)} ms` : `${num(s.periodS, 2)} s`);
       if (s.periodS < 0.7) add('Shown spinning', 'Slowed to 0.7 s per turn so the beams can be followed', true);
     }
-    add('Data', 'Position, distance and size catalogued; appearance procedural', true);
+    const source = !s.curated && CATALOGUE_OF[s.key?.split('-')[0]];
+    add('Data', `${source || 'Position, distance and size catalogued'}; appearance procedural`, true);
     return { title: resolved.name, className, kind: resolved.kind, rows };
   }
 

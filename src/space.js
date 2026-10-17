@@ -54,7 +54,7 @@ import { ExoSystem, exoKey, teffToBv } from './engine/exo-system.js';
 import { inventBlackHoleSystems, inventGalaxySystems } from './engine/generated.js';
 import { BlackHole, BLACK_HOLES, BLACK_HOLE_LAYER } from './engine/black-hole.js';
 import {
-  createDeepObjects, CLUSTERS, CLUSTER_LABELS, NEBULAE, NEBULA_LABELS, NEUTRON_LABELS, NEUTRON_STARS,
+  createDeepObjects, CLUSTER_LABELS, NEBULA_LABELS, NEUTRON_LABELS, NEUTRON_STARS,
   NEUTRON_STAR_RADIUS_KM,
 } from './engine/deep-objects.js';
 import { SkyTint } from './engine/sky-tint.js';
@@ -177,7 +177,7 @@ canvas.addEventListener('webglcontextrestored', () => {
 });
 
 const scene = new Scene();
-const camera = new PerspectiveCamera(52, 1, 0.001, 1e22);
+const camera = new PerspectiveCamera(52, 1, 0.001, 1e24);
 
 const skyScene = new Scene();
 const skyCamera = new PerspectiveCamera(52, 1, 0.05, 4000);
@@ -406,12 +406,24 @@ const bodyFrames = {
 };
 const starMeshes = new Map();
 const blackHoles = new Map();
+const galaxyIndexByName = new Map();
+data.galaxies.galaxies.forEach((g, i) => {
+  galaxyIndexByName.set(g.id, i);
+  if (g.name) galaxyIndexByName.set(g.name, i);
+});
 for (const spec of BLACK_HOLES) {
   const hole = new BlackHole(spec);
+  // At the very centre of its galaxy as the galaxy is drawn, so flying to
+  // one arrives at the other.
+  const host = spec.host != null ? deepField.galaxyAt(galaxyIndexByName.get(spec.host)) : null;
+  if (host) {
+    hole.world.set(host.x, host.y, host.z);
+    spec.world = hole.world.clone();
+  }
   blackHoles.set(`bh:${spec.key}`, hole);
   extras.add(hole.group);
 }
-const deepObjects = createDeepObjects();
+const deepObjects = createDeepObjects(data.deepSky);
 
 /**
  * The sky's own glow from where the camera is: inside a nebula or a cluster,
@@ -720,8 +732,11 @@ for (const [stem, stars] of components) {
 
 for (let i = 0; i < data.galaxies.galaxies.length; i++) {
   const g = data.galaxies.galaxies[i];
-  if (!LANDMARK_GALAXIES.has(g.id) && !g.name) continue;
-  if (!LANDMARK_GALAXIES.has(g.id) && g.d > 20) continue;
+  if (destByKey.has(`gal:${g.id}`)) continue;
+  // Every galaxy can be searched for and flown to; only the famous and the
+  // near are named on the sky without being asked, since sixteen thousand
+  // labels would be the whole screen.
+  const famous = LANDMARK_GALAXIES.has(g.id) || g.note || (g.name && g.d <= 20);
   addDestination({
     key: `gal:${g.id}`,
     name: g.name || g.id,
@@ -729,6 +744,7 @@ for (let i = 0; i < data.galaxies.galaxies.length; i++) {
     group: 'Galaxies',
     galaxyIndex: i,
     distMpc: g.d,
+    quiet: !famous,
   });
 }
 
@@ -775,16 +791,20 @@ for (const spec of BLACK_HOLES) {
     distPc: spec.distPc,
   });
 }
-for (const spec of NEBULAE) {
+// Every nebula and cluster in the catalogues, the hand-made ones named on the
+// sky and the rest once you are among them.
+for (const [key, { spec }] of deepObjects.nebulae) {
   addDestination({
-    key: `neb:${spec.key}`, name: spec.name, kind: 'nebula', group: 'Nebulae', spec,
-    subtype: spec.type, detail: NEBULA_LABELS[spec.type], distPc: spec.distPc,
+    key, name: spec.name, kind: 'nebula', group: 'Nebulae', spec,
+    subtype: spec.type, detail: spec.label ?? NEBULA_LABELS[spec.type], distPc: spec.distPc,
+    quiet: !spec.curated,
   });
 }
-for (const spec of CLUSTERS) {
+for (const [key, { spec }] of deepObjects.clusters) {
   addDestination({
-    key: `cl:${spec.key}`, name: spec.name, kind: 'cluster', group: 'Star clusters', spec,
+    key, name: spec.name, kind: 'cluster', group: 'Star clusters', spec,
     subtype: spec.type, detail: CLUSTER_LABELS[spec.type], distPc: spec.distPc,
+    quiet: !spec.curated,
   });
 }
 for (const spec of NEUTRON_STARS) {
@@ -2654,6 +2674,8 @@ function pointerOcclusion(nx, ny) {
   return nearest;
 }
 
+const PICKABLE_KINDS = new Set(['star', 'galaxy', 'black-hole', 'neutron-star', 'nebula', 'cluster']);
+
 /** The named thing under the pointer and how good a hit it is, lower being better. */
 function pickNamed(clientX, clientY) {
   const width = renderer.domElement.clientWidth;
@@ -2704,8 +2726,20 @@ function pickNamed(clientX, clientY) {
       if (moon.world) consider(moon.spec.key, moon.world, moon.spec.radiusKm, 0, moon.spec.key);
     }
   }
+  const pxPerRad = height / (camera.fov * Math.PI / 180);
   for (const dest of destinations) {
-    if (!['star', 'galaxy', 'black-hole', 'neutron-star'].includes(dest.kind)) continue;
+    if (!PICKABLE_KINDS.has(dest.kind)) continue;
+    // The thousands of catalogue galaxies, nebulae and clusters only once they
+    // are drawn big enough to aim at; as specks they would catch every click
+    // that missed something else.
+    if (dest.quiet && dest.key !== state.target) {
+      const resolved = resolveWorld(dest.key);
+      if (!resolved) continue;
+      const px = (resolved.radius / Math.max(resolved.position.distanceTo(controls.worldPosition), 1)) * pxPerRad;
+      if (px < 5) continue;
+      consider(dest.key, resolved.position, resolved.radius);
+      continue;
+    }
     // Invented systems carry no catalogue distance or magnitude, so the test
     // below let every one of them through: the eight stars of a galaxy ten
     // megaparsecs off, drawn nowhere, could be clicked from anywhere they
@@ -2986,6 +3020,15 @@ function collectLabelItems() {
   // it is.
   for (const dest of destinations) {
     const selected = dest.key === targetKey;
+    if (dest.quiet && !selected) {
+      // Named once you are among them: a nebula you are inside, a cluster
+      // next door, the galaxy you have just flown up to.
+      if (dest.kind === 'galaxy' || !shown.galaxies) continue;
+      const resolved = resolveWorld(dest.key);
+      if (!resolved || resolved.position.distanceTo(controls.worldPosition) > resolved.radius * 40) continue;
+      pushLabel({ key: dest.key, name: dest.name, position: resolved.position, radius: resolved.radius });
+      continue;
+    }
     if (dest.kind === 'star') {
       if (!shown.stars) continue;
       // Naked-eye stars and anything within ten parsecs; the rest are points
@@ -3133,7 +3176,8 @@ function frame(now) {
     : ship.active
       ? ship.view === 'cockpit' ? 3e-5 : 1.5e-3
       : clamp(range * 0.02, 0.0004, 1e8);
-  camera.far = 1e22;
+  // Out past the furthest catalogued galaxy, about ten gigaparsecs.
+  camera.far = 1e24;
   camera.updateProjectionMatrix();
 
   skyCamera.quaternion.copy(camera.quaternion);
@@ -3549,14 +3593,18 @@ function frame(now) {
     }
   }
 
+  // Seconds from J2000 on the simulation's clock, for what orbits the holes.
+  const simSeconds = (state.date.getTime() - 946728000000) / 1000;
   for (const hole of blackHoles.values()) {
     placeRelative(hole.group, hole.world);
     tmpCameraLocal.copy(cam).sub(hole.world).applyQuaternion(tmpQuaternionInverse(hole.group.quaternion));
     hole.update({
       cameraLocal: tmpCameraLocal,
       time: now / 1000,
+      simSeconds,
       visible: state.showBlackHoles,
       pixelsPerRadian,
+      pixelRatio: renderer.getPixelRatio(),
       exposure: state.exposure,
     });
   }
@@ -3604,7 +3652,9 @@ function frame(now) {
     pxPerRad: renderer.domElement.height / (2 * Math.tan((camera.fov * Math.PI) / 360)),
     sunDistanceKm: fromSun,
     cameraDistanceToSunKm: fromSun,
-    farKm: camera.far,
+    // The invented field thins out at a third of this; it is filler, and the
+    // catalogue's own galaxies are what should reach further.
+    farKm: 1e22,
   });
   if (gaia) {
     gaia.points.visible = deepField.showStars && fromSun < 8000 * PC_KM;
