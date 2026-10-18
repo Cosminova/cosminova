@@ -772,8 +772,9 @@ export class DeepField {
    */
   update({
     cameraWorld, pixelRatio, sunDistanceKm, limitMagnitude = 7.0, gain,
-    focusGalaxyIndex = -1, viewPxPerRad,
+    focusGalaxyIndex = -1, viewPxPerRad, veil = 1,
   }) {
+    this.galaxies.mesh.visible = this.showGalaxies !== false && veil > 0.2;
     this.starMaterial.uniforms.pixelRatio.value = pixelRatio;
     this.starMaterial.uniforms.limitMagnitude.value = limitMagnitude;
     if (gain !== undefined) this.starMaterial.uniforms.gain.value = gain;
@@ -823,8 +824,8 @@ export class DeepField {
     const mwSmall = clamp((mwPx - GALAXY_MIN_PX) / (GALAXY_FULL_PX - GALAXY_MIN_PX), 0, 1)
       * Math.min(1, (mwPx / 220) ** 2);
     const mwFade = clamp((Math.log10(Math.max(kpc, 1e-6)) + 0.3) / 1.4, 0, 1) * mwSmall;
-    this.mwMaterial.uniforms.opacity.value = mwFade * 0.14;
-    this.milkyWay.points.visible = mwFade > 0.02;
+    this.mwMaterial.uniforms.opacity.value = mwFade * 0.14 * veil;
+    this.milkyWay.points.visible = mwFade * veil > 0.02;
     if (this.milkyWay.points.visible) {
       const mw = this.mwRelative;
       const ww = this.mwWorld;

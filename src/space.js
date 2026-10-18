@@ -1607,6 +1607,7 @@ function setView(key, enabled) {
       if (gaia) gaia.points.visible = enabled;
       break;
     case 'galaxies':
+      deepField.showGalaxies = enabled;
       deepField.galaxies.mesh.visible = enabled;
       cosmos.galaxyMesh.visible = enabled;
       cosmos.showClouds = enabled;
@@ -1694,6 +1695,7 @@ ui = createExplorerUI({
     setMaxRenderScale(value) {
       quality.setMaxRenderScale(value);
     },
+    roamReadout: () => roamReadout(performance.now()),
     qualityStats() {
       return {
         fps: smoothedFps,
@@ -2165,6 +2167,27 @@ function floorBeforeControls(resolved, now) {
 }
 
 /**
+ * Under a full daytime sky nothing beyond the solar system shows. The layers
+ * are hidden after their own updates have run, and each is handed back exactly
+ * as it was once the sky darkens again.
+ */
+const veiled = new Set();
+function veilSky(day) {
+  if (day) {
+    for (const object of [...cosmos.underlay, ...cosmos.objects, ...deepField.objects, deepObjects.group, distantBodies.object,
+      ...[...blackHoles.values()].map((hole) => hole.group)]) {
+      if (object.visible) {
+        object.visible = false;
+        veiled.add(object);
+      }
+    }
+  } else if (veiled.size) {
+    for (const object of veiled) object.visible = true;
+    veiled.clear();
+  }
+}
+
+/**
  * The ground under a walker.
  *
  * The height function at the walker's own point is not enough. The mesh drawn
@@ -2182,8 +2205,9 @@ const walkRight = new Vector3();
 function walkOnGround(surface, key, now) {
   const planet = surface.planet;
   const up = controls.walkLocal;
-  if (walkProbe.key !== key) {
+  if (walkProbe.key !== key || walkProbe.epoch !== controls.walkGroundEpoch) {
     walkProbe.key = key;
+    walkProbe.epoch = controls.walkGroundEpoch;
     walkProbe.km = null;
     walkProbe.at = -Infinity;
   }
@@ -2361,6 +2385,33 @@ function updateRoamFrame() {
   // motion is no longer yours to share.
   if (bestKey && bestSurface < bestRadius * 300) controls.setRoamAnchor(bestKey, bestPos);
   else controls.setRoamAnchor(starKey, starPos);
+  // Roaming belongs to no one body: whatever you fly down to becomes the
+  // selection, so its ground loads in detail and Walk lands on it, without the
+  // camera being handed to it.
+  if (bestKey && bestKey !== state.target && bestSurface < bestRadius * 1.5 && resolveWorld(bestKey)?.kind === 'body') {
+    selectTarget(bestKey, { fly: false });
+  }
+}
+
+const roamLast = { offset: new Vector3(), key: null, at: 0, speed: 0 };
+function roamReadout(now) {
+  if (controls.mode !== 'roam') return null;
+  const dt = (now - roamLast.at) / 1000;
+  if (roamLast.key === controls.roamOriginKey && dt > 0 && dt < 1) {
+    const moved = roamLast.offset.distanceTo(controls.roamOffset) / dt;
+    roamLast.speed += (moved - roamLast.speed) * Math.min(1, dt * 4);
+  }
+  roamLast.offset.copy(controls.roamOffset);
+  roamLast.key = controls.roamOriginKey;
+  roamLast.at = now;
+  const name = roamNearest.key ? (resolveWorld(roamNearest.key)?.name ?? roamNearest.key) : null;
+  const km = (v) => (v < 1 ? `${Math.round(v * 1000)} m`
+    : v < 1e6 ? `${Math.round(v).toLocaleString()} km`
+      : v < 1.496e8 * 2000 ? `${(v / 1.496e8).toFixed(v < 1.496e9 ? 2 : 0)} au`
+        : `${(v / 9.4607e12).toFixed(2)} ly`);
+  const s = roamLast.speed;
+  const speed = s < 1 ? `${Math.round(s * 1000)} m/s` : s < 299792 ? `${km(s)}/s` : `${(s / 299792).toFixed(s < 2997920 ? 2 : 0)} c`;
+  return { speed, nearest: name ? `${name} \u00b7 ${km(Math.max(roamSurfaceKm, 0))}` : '' };
 }
 
 /*
@@ -3650,8 +3701,19 @@ function frame(now) {
   const viewingGalaxy = resolved?.kind === 'galaxy';
   const fromSun = sunDistance;
   const panoramaFade = 1 / (1 + (fromSun / PC_KM) * 6);
-  milkyWay.mesh.visible = panoramaFade > 0.03;
-  milkyWay.update({ exposure: 0.55, intensity: 0.5 * panoramaFade, atmosphere: null });
+  // Under a lit sky the stars are there but drowned: the eye sets itself for
+  // the daylight and they fall below it. Faded by the air the camera is in.
+  const daylight = (resolved?.kind === 'body' && surfaceOf(resolved.key)?.planet.daylight) || 0;
+  const starsLeft = clamp(1 - 1.12 * daylight, 0, 1);
+  // Under a closed deck the sun's disc is gone too; its light still arrives,
+  // diffused, through the sky shader.
+  const groundPlanet = resolved?.kind === 'body' ? surfaceOf(resolved.key)?.planet : null;
+  const decked = !!groundPlanet?.sky?.visible && (groundPlanet.skyUniforms?.uOvercast.value ?? 0) > 0.5
+    && groundPlanet.material.uniforms.uOvercastSeen.value < 0.5;
+  sun.group.visible = !decked;
+  if (exoSystem) exoSystem.star.group.visible = !decked;
+  milkyWay.mesh.visible = panoramaFade > 0.03 && starsLeft > 0.02;
+  milkyWay.update({ exposure: 0.55, intensity: 0.5 * panoramaFade * starsLeft, atmosphere: null });
 
   // A narrower field is a bigger telescope. The same starlight falls across more
   // pixels, so fainter stars lift out of the background the further you zoom —
@@ -3664,10 +3726,11 @@ function frame(now) {
     pixelRatio: renderer.getPixelRatio(),
     sunDistanceKm: fromSun,
     limitMagnitude: Math.min(7.2 + 2.5 * Math.log10(magnification), 21),
-    gain: viewingGalaxy
+    gain: (viewingGalaxy
       ? 0.1
-      : 0.05 / (1 + (targetRadius / Math.max(controls.distanceKm, 1)) * 10),
+      : 0.05 / (1 + (targetRadius / Math.max(controls.distanceKm, 1)) * 10)) * starsLeft,
     focusGalaxyIndex: viewingGalaxy ? destByKey.get(state.target)?.galaxyIndex ?? -1 : -1,
+    veil: starsLeft,
     viewPxPerRad: renderer.domElement.clientHeight
       / (2 * Math.tan((camera.fov * Math.PI) / 360)),
   });
@@ -3682,8 +3745,9 @@ function frame(now) {
     // catalogue's own galaxies are what should reach further.
     farKm: 1e22,
   });
+  veilSky(starsLeft < 0.06);
   if (gaia) {
-    gaia.points.visible = deepField.showStars && fromSun < 8000 * PC_KM;
+    gaia.points.visible = deepField.showStars && fromSun < 8000 * PC_KM && starsLeft > 0.3;
     // Brightest first, so a frame under strain sheds the faint tail, which is
     // most of the vertices and very little of the picture.
     gaia.points.geometry.setDrawRange(0, Math.round(gaia.count * clamp(quality.level ** 1.5, 0.3, 1)));

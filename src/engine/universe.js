@@ -4,6 +4,7 @@ import { PLANETS, heliocentric } from '../solar.js';
 import { BODIES, SUN } from './bodies-data.js';
 import { MOONS } from './moons-data.js';
 import { isLocked } from './figures.js';
+import { moonOrbit, orbitOffset } from './kepler.js';
 
 /**
  * Where everything is, in kilometres, in a right-handed world frame with
@@ -98,13 +99,7 @@ export class Universe {
       if (!parent) continue;
 
       const angle = (daysSinceEpoch / spec.orbitDays) * 2 * Math.PI;
-      const incl = (spec.orbitInclDeg ?? 0) * DEG;
-      const r = spec.orbitKm;
-      this._tmp.set(
-        r * Math.cos(angle),
-        r * Math.sin(angle) * Math.sin(incl),
-        r * Math.sin(angle) * Math.cos(incl),
-      );
+      orbitOffset(this._tmp, moonOrbit(spec), angle);
       // Orbit follows the parent's equator, so inherit the parent's tilt.
       this._tmp.applyQuaternion(parent.tilt);
       state.position.copy(parent.position).add(this._tmp);

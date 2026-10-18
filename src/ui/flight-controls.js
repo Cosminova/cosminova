@@ -167,7 +167,18 @@ export function createFlightControls({ controls, prefs }) {
     text: HINT.flying,
   });
 
+  // Free flight has no target to read a distance from, so it says what it can:
+  // how fast you are going and what you are nearest.
+  const readoutSpeed = el('span', { class: 'flight-readout-speed' });
+  const readoutNear = el('span', { class: 'flight-readout-near' });
+  const readout = el('div', { class: 'flight-readout', hidden: true }, [
+    el('span', { class: 'flight-readout-label', text: 'Free roam' }),
+    readoutSpeed,
+    readoutNear,
+  ]);
+
   const root = el('div', { class: 'flight takes-pointer', hidden: true }, [
+    readout,
     el('div', { class: 'flight-row' }, [
       pad,
       el('div', { class: 'flight-side' }, [
@@ -239,6 +250,14 @@ export function createFlightControls({ controls, prefs }) {
       if (on === roaming) return;
       roaming = on;
       syncHint();
+    },
+
+    setReadout(values) {
+      const on = Boolean(values) && roaming && !piloting;
+      if (readout.hidden === on) readout.hidden = !on;
+      if (!on) return;
+      if (readoutSpeed.textContent !== values.speed) readoutSpeed.textContent = values.speed;
+      if (readoutNear.textContent !== values.nearest) readoutNear.textContent = values.nearest;
     },
 
     setShip(on) {

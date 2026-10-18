@@ -1599,6 +1599,33 @@ body.immersive .label-layer {
   text-align: center;
 }
 
+.flight-readout {
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.9em;
+  font-size: var(--fs-micro);
+  letter-spacing: 0.04em;
+  font-variant-numeric: tabular-nums;
+  color: var(--dim-2);
+}
+
+.flight-readout[hidden] {
+  display: none;
+}
+
+.flight-readout-label {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--dim-3, var(--dim-2));
+}
+
+.flight-readout-speed {
+  color: var(--text, #fff);
+  min-width: 6.5em;
+  text-align: right;
+}
+
 /* The pad is a hand-sized target and the first thing to go when there is no
    room; the keys still work, and the hint in the tooltip still says so. */
 @media (max-width: 900px) {

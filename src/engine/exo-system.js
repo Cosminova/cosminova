@@ -5,6 +5,7 @@ import { createRings } from './rings.js';
 import { starLook, starTint, surfaceBrightness } from './stellar.js';
 import { proceduralCraft } from './craft-missions.js';
 import { Planet } from './planet.js';
+import { exoOrbit, moonOrbit, orbitOffset } from './kepler.js';
 import { Star } from './star.js';
 import { AU_KM, equatorialToEcliptic, SOLAR_RADIUS_KM } from './units.js';
 import { equatorialToVector } from '../astro.js';
@@ -51,6 +52,7 @@ function detailsOf(described) {
   return {
     temperatureK: described.temperatureK,
     life: described.life,
+    lifeNote: described.lifeNote,
     air: described.air,
     oceanKind: described.oceanKind,
     volatiles: described.volatiles,
@@ -99,6 +101,10 @@ function specFromPlanet(entry, described, hostKey) {
     terrain: gaseous ? 0 : clamp(0.0024 * Math.sqrt(6371 / described.radiusKm), 0.0012, 0.006),
     macroRelief: gaseous ? 0 : 0.0012,
     rockDensity: gaseous ? 0 : 0.5,
+    // Mesas and stepped cliffs, strongest on dry worlds where nothing fills
+    // the steps back in; benches a few hundred metres high.
+    terrace: gaseous ? 0 : clamp((described.terrace ?? 0) * (oceanFraction > 0.6 ? 0.4 : 1) * 1.3 - 0.25, 0, 0.9),
+    terraceKm: 0.12 + ((described.terrace ?? 0) * 13.7 % 1) * 0.5,
     // How large the surface provinces are: a world of a few continents or one
     // of many islands.
     paletteFreq: gaseous ? 2.2 : described.provinceScale,
@@ -138,7 +144,12 @@ function specFromPlanet(entry, described, hostKey) {
             height: 0.028 * clamp(0.7 + Math.log10((described.air?.pressureBar ?? 1) + 0.1) * 0.25, 0.5, 1.4),
             density: airDensity(described.air?.pressureBar),
             tint: described.hazeTint,
+            // Past about ten bar the air is a Venus: one unbroken deck.
+            overcast: clamp((Math.log10(described.air?.pressureBar ?? 1) - 0.8) / 0.8, 0, 1),
           },
+    cloudTint: described.hazeTint && (described.air?.pressureBar ?? 1) > 6
+      ? described.hazeTint.map((c) => 0.55 + 0.45 * c)
+      : undefined,
     geology: gaseous ? null : inventGeology({ radiusKm: described.radiusKm, bulk: described.bulk === 'aquaria' ? 'ice' : 'rock' }, random),
     details: detailsOf(described),
     classLabel: described.label,
@@ -299,19 +310,15 @@ export class ExoSystem {
     }
     for (const item of this.planets) {
       const angle = item.angle0 + (days / item.spec.orbitDays) * Math.PI * 2;
-      const r = item.spec.orbitKm;
-      const incl = ((item.spec.tiltDeg * Math.PI) / 180) * 0.15;
       item.local = item.local || new Vector3();
-      item.local.set(r * Math.cos(angle), r * Math.sin(angle) * Math.sin(incl), r * Math.sin(angle) * Math.cos(incl));
+      orbitOffset(item.local, exoOrbit(item.spec), angle);
       item.world = item.world || new Vector3();
       item.world.copy(host).add(item.local);
       item.planet.group.position.copy(item.world).sub(cameraWorld);
       for (const moon of item.moons) {
         const ma = moon.angle0 + (days / moon.spec.orbitDays) * Math.PI * 2;
-        const mr = moon.spec.orbitKm;
-        const mIncl = ((moon.spec.inclinationDeg ?? 0) * Math.PI) / 180;
         moon.local = moon.local || new Vector3();
-        moon.local.set(mr * Math.cos(ma), mr * Math.sin(ma) * Math.sin(mIncl), mr * Math.sin(ma) * Math.cos(mIncl)).add(item.local);
+        orbitOffset(moon.local, moonOrbit(moon.spec), ma).add(item.local);
         moon.world = moon.world || new Vector3();
         moon.world.copy(host).add(moon.local);
         moon.planet.group.position.copy(moon.world).sub(cameraWorld);

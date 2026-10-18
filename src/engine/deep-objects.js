@@ -670,7 +670,14 @@ class Nebula extends Shown {
   update(cameraLocal, pixelsPerRadian, steps) {
     this.build();
     const u = this.material.uniforms;
-    u.uCamera.value.copy(cameraLocal).multiplyScalar(1 / this.radiusKm);
+    // Seen from light-years off, only the bright core of a cloud registers:
+    // the faint outskirts that make it a sprawl up close are lost against the
+    // sky, so from a planetary system it is a compact dim knot, and it opens
+    // out to its full extent as you close on it.
+    const far = Math.min(1, Math.max(0, (this.distanceKm / this.radiusKm - 6) / 60));
+    const drawnKm = this.radiusKm * (1 - 0.8 * far);
+    this.group.scale.setScalar(drawnKm);
+    u.uCamera.value.copy(cameraLocal).multiplyScalar(1 / drawnKm);
     // A cloud is the same surface brightness from any distance, and a real
     // one is faint: Orion from Earth is a smudge. Up close the eye adapts to
     // it, so the drawn brightness follows the apparent size, not the distance
@@ -681,7 +688,7 @@ class Nebula extends Shown {
     // From inside, the whole sky is cloud, and at the brightness it has
     // seen whole from outside it would be a white-out.
     const bright = (0.04 + 0.96 * near * near * (3 - 2 * near)) * (1 - 0.5 * Math.sqrt(this.inside));
-    u.uBright.value = bright * (faint + (1 - faint) * near);
+    u.uBright.value = bright * (faint + (1 - faint) * near) * (1 - 0.75 * far);
     // A few pixels across, or too faint to show detail, needs nothing like
     // the full march; a dim cloud across half the sky is the costliest thing
     // on screen otherwise.

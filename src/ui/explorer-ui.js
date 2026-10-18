@@ -1471,6 +1471,7 @@ export function createExplorerUI(config) {
     flight.setWalking(controls.mode === 'walk');
     flight.setShip(Boolean(controls.pilot) && controls.mode === 'roam');
     flight.sync();
+    flight.setReadout(hooks.roamReadout?.() ?? null);
     if (!quality.panel.root.hidden) quality.update(hooks.qualityStats?.());
 
     // The inspector's numbers move; its structure does not. Rebuild the

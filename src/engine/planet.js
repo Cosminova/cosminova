@@ -303,7 +303,7 @@ const RELIEF_GLSL = /* glsl */ `
     if (uCraterOctaves < 0.05 && uRoughness < 0.001 && uFractureDepth < 0.001 &&
         uIrregular < 0.001 && uMacroRelief < 0.001 && uBasinDepth < 0.001 && uTerrain < 0.00001 &&
         uCrustRelief < 0.001 && uFloodCoverage < 0.001 && uRiftCoverage < 0.001 &&
-        uVolcanoCoverage < 0.001) return vec4(0.0);
+        uVolcanoCoverage < 0.001 && uOceanRelief < 0.001) return vec4(0.0);
 
     float cellKm = uRadius / uCraterFreq;
     // Where this body's craters fell. Kept small so the lattice coordinate does
@@ -383,7 +383,10 @@ const RELIEF_GLSL = /* glsl */ `
     if (uMacroRelief > 0.001) {
       vec4 ridges = ridgedd(d * 2.2 + uSurfaceSeed * 0.01, 5);
       float scale = uRadius * uMacroRelief;
-      t.x += ridges.x * scale;
+      // Ridged noise is never negative; its mean is taken off so the swell
+      // rises and falls about the datum instead of lifting the whole body,
+      // which on Earth stood every walker in the stratosphere.
+      t.x += (ridges.x - 0.62) * scale;
       t.yzw += ridges.yzw * 2.2 * scale;
     }
     if (uTerrain > 0.00001) {
@@ -421,6 +424,31 @@ const RELIEF_GLSL = /* glsl */ `
         t.yzw += hills.yzw * 260.0 * r;
       }
     }
+    if (uOceanRelief > 0.001 && uHasOcean > 0.5) {
+      // Land and sea from the measured ocean mask: the seabed falls away from
+      // the coast, and inland the ground climbs from coastal plain into hills
+      // and, well away from the sea, ridged ranges. The mask is read blurred,
+      // so its gradient is the shape of the continental shelf and slope.
+      float lon = atan(d.z, -d.x);
+      float lat = asin(clamp(d.y, -1.0, 1.0));
+      vec2 ouv = vec2(0.5 + lon / 6.2831853, 0.5 + lat / 3.14159265);
+      float sea = textureLod(uOceanMap, ouv, 4.0).r;
+      float coast = textureLod(uOceanMap, ouv, 6.5).r;
+      float land = 1.0 - sea;
+      float inland = smoothstep(0.55, 0.05, coast) * land;
+      int lands = int(clamp(log2(0.5 / max(pixelAngle * 14.0, 1e-12)), 1.0, 7.0));
+      vec4 hills = fbmd(d * 14.0 + uSurfaceSeed * 0.013, lands, 2.07, 0.47);
+      int ranges = int(clamp(log2(0.5 / max(pixelAngle * 9.0, 1e-12)), 1.0, 8.0));
+      vec4 belts = fbmd(d * 2.3 + 7.1, 3, 2.0, 0.5);
+      vec4 ridges = ridgedd(d * 9.0 + belts.xyz * 0.6 + 3.3, ranges);
+      float belt = smoothstep(0.05, 0.35, belts.x) * inland;
+      float mountains = pow(max(ridges.x - 0.35, 0.0), 1.6) * uLandRelief * 2.6 * belt;
+      float rolling = (hills.x * 0.5 + 0.5) * uLandRelief * (0.08 + 0.3 * inland) * land;
+      float base = mix(-uOceanRelief * smoothstep(0.5, 1.0, coast), 0.02 + 0.25 * inland * uLandRelief * 0.2, land);
+      t.x += base + rolling + mountains;
+      t.yzw += hills.yzw * 14.0 * uLandRelief * (0.08 + 0.3 * inland) * 0.5 * land
+             + ridges.yzw * 9.0 * uLandRelief * 2.6 * belt * 1.6 * pow(max(ridges.x - 0.35, 0.0), 0.6) * step(0.35, ridges.x);
+    }
     if (uIrregular > 0.001) {
       vec4 n1 = noised(d * 1.55 + uSurfaceSeed);
       vec4 n2 = noised(d * vec3(2.7, 2.1, 3.4) + 5.2);
@@ -432,6 +460,25 @@ const RELIEF_GLSL = /* glsl */ `
       t.yzw += (n1.yzw * 1.55 * 0.52
               + n2.yzw * vec3(2.7, 2.1, 3.4) * 0.33
               + n3.yzw * vec3(4.8, 3.3, 2.4) * 0.15) * scale;
+    }
+
+    if (uTerrace > 0.001 && uTerraceKm > 0.0) {
+      // Flat-lying strata eroded back into benches: each layer a near-level
+      // tread ending at a cliff. Only over some provinces, so a world has its
+      // mesa country and its rolling country rather than steps everywhere.
+      float province = smoothstep(0.0, 0.3, fbmd(d * 3.1 + uSurfaceSeed * 0.021 + 17.0, 3, 2.0, 0.5).x);
+      float amt = uTerrace * province;
+      if (amt > 0.001) {
+        float s = t.x / uTerraceKm;
+        float f = fract(s);
+        float riser = smoothstep(0.78, 1.0, f);
+        float stepped = (floor(s) + riser) * uTerraceKm;
+        // Slope scaled with the height map: nearly flat on a tread, steep on a
+        // riser, which is what the lighting needs to draw the cliff.
+        float slope = 6.0 * ((f - 0.78) / 0.22) * (1.0 - (f - 0.78) / 0.22) / 0.22 * step(0.78, f);
+        t.x = mix(t.x, stepped, amt);
+        t.yzw *= mix(1.0, max(slope, 0.08), amt);
+      }
     }
 
     if (regional) {
@@ -519,6 +566,12 @@ const SURFACE_UNIFORMS_GLSL = /* glsl */ `
   uniform float uIrregular;
   uniform float uSurfaceSeed;
   uniform float uSeaLevelKm;      // 0 for a dry world
+  uniform sampler2D uOceanMap;
+  uniform float uHasOcean;
+  uniform float uOceanRelief;
+  uniform float uLandRelief;
+  uniform float uTerrace;
+  uniform float uTerraceKm;
 `;
 
 const HEIGHT_GLSL = /* glsl */ `
@@ -738,6 +791,10 @@ const FRAGMENT = /* glsl */ `
   uniform vec3 uHeatColour;
   uniform float uMacroRelief;
   uniform float uTerrain;
+  uniform float uOceanRelief;
+  uniform float uLandRelief;
+  uniform float uTerrace;
+  uniform float uTerraceKm;
   uniform float uIrregular;
   uniform vec3 uAxisScale;
   uniform vec3 uTideDir;
@@ -750,6 +807,9 @@ const FRAGMENT = /* glsl */ `
   uniform vec3 uSeaDeep;
   uniform vec3 uSeaShallow;
   uniform float uCloudCover;
+uniform float uOvercast;
+uniform float uOvercastSeen;
+uniform float uWaveTime;
   uniform float uCloudFreq;
   uniform float uCloudHeight;
   uniform float uCloudSeed;
@@ -1060,7 +1120,7 @@ const FRAGMENT = /* glsl */ `
     if (uIceLatitude > 0.01 && uHasColourMap < 0.5) {
       albedo = mix(albedo, uPaletteD, smoothstep(uIceLatitude - 0.08, uIceLatitude + 0.04, abs(dir.y)) * (1.0 - steep * 0.7));
     }
-    if (wet > 0.0) {
+    if (wet > 0.0 && uHasColourMap < 0.5) {
       // Deep ocean and continental shelf. The shelf colour is mixed with what is
       // under it so a sandy coast shows through the shallows and a dark one
       // does not, which is most of what makes a coastline look like one.
@@ -1179,8 +1239,26 @@ const FRAGMENT = /* glsl */ `
     // world gets the same highlight as Earth does.
     float water = uHasOcean > 0.5 ? texture2D(uOceanMap, uv).r : wet;
     if (water > 0.001 && uSpecular > 0.0) {
+      // Waves: a long swell and a short chop, drifting in different directions,
+      // drawn into the normal where a pixel is small enough to show them. Past
+      // that they are below a pixel and only widen the glint into glitter.
+      float footprintW = length(vRel) * 1000.0 / uPixelsPerRadian;
+      float waveVis = (1.0 - smoothstep(3.0, 80.0, footprintW)) * water;
+      vec3 waveNormal = normal;
+      if (waveVis > 0.001) {
+        vec3 m = uDetailFrac + (uCameraRel + vRel) * 1000.0;
+        vec3 swell = m / 42.0 + vec3(uWaveTime * 0.09, 0.0, uWaveTime * 0.06);
+        vec3 chop = m / 6.5 + vec3(-uWaveTime * 0.31, uWaveTime * 0.17, uWaveTime * 0.26);
+        vec3 g = fbmd(swell, 3, 2.0, 0.5).yzw * 0.3 + fbmd(chop, 2, 2.1, 0.5).yzw * 0.16;
+        g -= dir * dot(g, dir);
+        waveNormal = normalize(normal - g * waveVis);
+        // Faces tipped towards the sun catch more of it, and the troughs read
+        // darker: the shading that makes the surface look like it moves.
+        colour *= 1.0 + clamp(dot(waveNormal - normal, uSunDir) * 1.4, -0.35, 0.35) * waveVis;
+      }
       vec3 halfway = normalize(uSunDir + view);
-      float spec = pow(max(dot(normal, halfway), 0.0), 220.0);
+      float sharp = mix(90.0, 260.0, clamp(waveVis * 1.5, 0.0, 1.0));
+      float spec = pow(max(dot(waveNormal, halfway), 0.0), sharp) * mix(0.55, 1.0, sharp / 260.0);
       colour += uSunColour * spec * water * uSpecular * step(0.001, lit);
     }
 
@@ -1247,6 +1325,19 @@ const FRAGMENT = /* glsl */ `
           * (shade * horizon * sunVis + 0.035 * uAtmosphereDensity);
         colour = mix(colour, cloudLit, cover * 0.88);
       }
+    }
+
+    if (uOvercast > 0.001 && uOvercastSeen > 0.001) {
+      // A deck that never breaks: from above the ground is simply not there,
+      // only the cloud tops, streaked east-west by winds far faster than the
+      // planet turns, with the chevrons those winds fold into at low latitude.
+      vec3 sp = dir * vec3(2.2, 7.5, 2.2) + uCloudSeed;
+      sp.x += abs(dir.y) * 1.8;
+      float streak = fbmd(sp + fbmd(sp * 0.6 + 5.0, 3, 2.1, 0.5).x * 0.9, 4, 2.2, 0.5).x * 0.5 + 0.5;
+      float shadeO = max(dot(dir, uSunDir), 0.0);
+      vec3 tops = uCloudTint * (0.82 + 0.3 * streak) * uSunColour * uSunIntensity
+        * (pow(shadeO, 0.7) * horizon * eclipse + 0.02);
+      colour = mix(colour, tops, uOvercast * uOvercastSeen);
     }
 
     if (uHasNight > 0.5) {
@@ -1442,8 +1533,13 @@ const SKY_COMMON = /* glsl */ `
   uniform float uMieG;
   uniform float uScaleHeight;
   uniform float uMieHeight;
+  // A cloud deck that closes over the whole sky (Venus, Titan): above it the
+  // stars and sun are gone and the dome is one diffuse glow.
+  uniform float uOvercast;
+  uniform vec3 uDeckTint;
 
   varying vec3 vLocal;
+  bool gSkyward;
 
   /** Both roots of a ray against a sphere at the origin; x > y means a miss. */
   vec2 sphereSpan(vec3 o, vec3 d, float r) {
@@ -1493,10 +1589,12 @@ const SKY_COMMON = /* glsl */ `
     if (shell.y <= 0.0) return false;
     near = max(shell.x, 0.0);
     float far = shell.y;
+    gSkyward = true;
     // Stop at the ground: air beyond it is not on this ray.
     vec2 ground = sphereSpan(origin, ray, uRadius + uGroundKm);
     if (ground.x > 0.0 && ground.y > ground.x) {
       far = min(far, ground.x);
+      gSkyward = false;
     } else if (uGroundKm > 0.0) {
       // Over the local horizon but still into the lower ground: that is the
       // distant terrain, and ending at the tangent point joins it to the near
@@ -1537,6 +1635,9 @@ const SKY_EXTINCTION_FRAGMENT = /* glsl */ `
 
     vec2 column = columnAlong(origin + ray * near, ray, len);
     vec3 tau = uRayleigh * column.x + vec3(uMie * column.y);
+    if (uOvercast > 0.0) {
+      tau += gSkyward ? vec3(12.0 * uOvercast) : vec3(len / (uScaleHeight * 2.0) * uOvercast);
+    }
     // Multiplied into the framebuffer, so the colour *is* the transmittance.
     gl_FragColor = vec4(exp(-tau), 1.0);
   }
@@ -1598,8 +1699,24 @@ const SKY_INSCATTER_FRAGMENT = /* glsl */ `
       sumM += density.y * transmittance * dt;
     }
 
-    vec3 colour = (sumR * uRayleigh * phaseR + sumM * uMie * phaseM)
+    // Single scattering leaves out the light that has bounced more than once,
+    // which under a noon sky is most of it: it is why the whole dome is bright
+    // and evenly blue rather than a dim tint. Isotropic, and weighted the same
+    // as the single-scattered Rayleigh light it came from.
+    vec3 multiple = sumR * uRayleigh * 0.16;
+    vec3 colour = (sumR * uRayleigh * phaseR + sumM * uMie * phaseM + multiple)
       * uSunColour * min(uSunIntensity, 2.4) * uBrightness;
+    if (uOvercast > 0.0) {
+      // Light diffused through the deck: brightest under the hidden sun, dimming
+      // towards the horizon and gone once the sun has set behind the planet.
+      float sunUp = dot(normalize(origin), uSunDir);
+      float day = smoothstep(-0.18, 0.35, sunUp);
+      float lift = max(dot(ray, normalize(origin)), 0.0);
+      vec3 deck = uDeckTint * uSunColour * min(uSunIntensity, 2.4)
+        * day * (0.16 + 0.1 * lift + 0.12 * pow(max(mu, 0.0), 6.0));
+      float fog = gSkyward ? 1.0 : 1.0 - exp(-len / (uScaleHeight * 2.0));
+      colour = mix(colour, deck, uOvercast * fog);
+    }
     gl_FragColor = vec4(colour, 1.0);
   }
 `;
@@ -1803,6 +1920,10 @@ export class Planet {
         // wastes the data and moves the ground away from every position derived
         // from it. On the Moon it lifted the surface above the Apollo landers.
         uTerrain: { value: spec.terrain ?? 0 },
+        uOceanRelief: { value: spec.oceanReliefKm ?? 0 },
+        uLandRelief: { value: spec.landReliefKm ?? 0 },
+        uTerrace: { value: spec.terrace ?? 0 },
+        uTerraceKm: { value: spec.terraceKm ?? 0.3 },
         uMacroRelief: {
           value:
             spec.macroRelief ??
@@ -1835,6 +1956,9 @@ export class Planet {
         uSeaDeep: { value: new Color(...(spec.seaDeep ?? [0.012, 0.045, 0.11])) },
         uSeaShallow: { value: new Color(...(spec.seaShallow ?? [0.06, 0.22, 0.30])) },
         uCloudCover: { value: spec.cloudCover ?? 0 },
+        uOvercast: { value: spec.atmosphere?.overcast ?? 0 },
+        uOvercastSeen: { value: 1 },
+        uWaveTime: { value: 0 },
         uCloudFreq: { value: spec.cloudFreq ?? 3.1 },
         uCloudHeight: { value: spec.cloudHeight ?? 0.0022 },
         uCloudSeed: { value: spec.cloudSeed ?? seedFromKey(`${spec.key}-cloud`) },
@@ -1858,7 +1982,11 @@ export class Planet {
         // Normal optical depth the ring profile's opacity stands for. Saturn's B
         // ring reaches about 2.5, which is opaque enough to cast a genuinely dark
         // shadow; the profile's alpha scales this.
-        uRingTau: { value: spec.rings?.opticalDepth ?? 2.5 },
+        // Normal optical depth as the shadow sees it. The rings' own default of
+        // 2.5 is for how bright they look; through the slant path that is so
+        // opaque the whole shadow goes to one black band, where the real one
+        // shows the A ring translucent and the Cassini Division as a bright gap.
+        uRingTau: { value: spec.rings?.opticalDepth ? Math.min(spec.rings.opticalDepth, 1.6) : 1.1 },
         uShineDir: { value: new Vector3(0, 1, 0) },
         uShineColour: { value: new Color(1.0, 0.88, 0.72) },
         uShine: { value: 0 },
@@ -2002,6 +2130,8 @@ export class Planet {
       uMieG: { value: air.mieG ?? 0.76 },
       uScaleHeight: { value: scaleHeightKm },
       uMieHeight: { value: mieHeightKm },
+      uOvercast: { value: air.overcast ?? 0 },
+      uDeckTint: { value: new Color(...tint.map((c) => c / peak)) },
     };
 
     this.skyUniforms = uniforms;
@@ -2291,6 +2421,9 @@ export class Planet {
     const u = this.material.uniforms;
     u.uCameraLocal.value.copy(cameraLocal);
     u.uSunDir.value.copy(sunLocal);
+    // Wall-clock, not simulation time: waves at a thousand-times time rate are
+    // a blur, and paused time should not freeze the sea.
+    u.uWaveTime.value = (performance.now() / 1000) % 3600;
     if (sunColour) u.uSunColour.value.copy(sunColour);
     if (sunIntensity !== undefined) u.uSunIntensity.value = sunIntensity;
     if (sunAngular !== undefined) u.uSunAngular.value = sunAngular;
@@ -2358,6 +2491,26 @@ export class Planet {
       const inside = cameraLocal.length() < a.uShellRadius.value;
       this.atmosphere.visible = !inside;
       this.sky.visible = inside;
+      // How much a lit sky overhead drowns out the stars, for the star field to
+      // fade by: nothing at night or from above the air, almost everything under
+      // Earth's noon sky, less under a thin one like Mars'.
+      this.daylight = 0;
+      if (inside) {
+        const r = cameraLocal.length();
+        const thickness = Math.max(a.uShellRadius.value - this.radius, 1e-3);
+        const sunUp = cameraLocal.dot(sunLocal) / Math.max(r * sunLocal.length(), 1e-9);
+        const twilight = clamp((sunUp + 0.14) / 0.24, 0, 1);
+        const thick = 1 - Math.exp(-(spec.atmosphere.density ?? 1) * 1.6);
+        const low = clamp(1 - (r - this.radius) / (thickness * 0.5), 0, 1);
+        this.daylight = twilight * twilight * (3 - 2 * twilight) * thick * low;
+        // Under a closed deck the stars are gone by night as well as by day.
+        this.daylight = Math.max(this.daylight, (spec.atmosphere.overcast ?? 0) * low);
+      }
+      if (u.uOvercast.value > 0) {
+        const alt = cameraLocal.length() - this.radius;
+        const thickness = Math.max(a.uShellRadius.value - this.radius, 1e-3);
+        u.uOvercastSeen.value = clamp((alt / thickness - 0.25) / 0.35, 0, 1);
+      }
       if (inside) {
         const s = this.skyUniforms;
         s.uCameraLocal.value.copy(cameraLocal);

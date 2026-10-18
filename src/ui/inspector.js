@@ -398,7 +398,7 @@ export function describe(resolved, context = {}) {
       add('Atmosphere', 'None to speak of', true);
     }
     if (d.oceanKind) add('Oceans', `${d.oceanKind} \u00b7 ${VOLATILE_WORDS[d.volatiles] ?? d.volatiles}`, true);
-    add('Life', LIFE_WORDS[d.life] ?? null, true);
+    add('Life', d.lifeNote ?? LIFE_WORDS[d.life] ?? null, true);
   }
 
   if (spec.rotationHours) {

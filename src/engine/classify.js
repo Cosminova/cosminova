@@ -529,6 +529,142 @@ function heatOf(temperatureK, gaseous) {
  * taken as given; mass and temperature fall back to relations rather than
  * being invented outright.
  */
+const pickOf = (random, list) => list[Math.floor(random() * list.length) % list.length];
+
+/** The colour photosynthesis would settle on under a star of this temperature. */
+function foliageWord(starTeff = 5772) {
+  if (starTeff < 3400) return 'near-black';
+  if (starTeff < 4300) return 'purple and maroon';
+  if (starTeff < 5300) return 'rust-red and amber';
+  if (starTeff < 6500) return 'green';
+  return 'blue-green and teal';
+}
+
+/**
+ * A sentence on what lives there, built from the world's own conditions so
+ * two planets with life rarely read alike. Drawn from its own stream, seeded
+ * by the life roll, so adding words never reshuffles a planet's colours.
+ */
+function describeLife({ life, temperatureK, oceanLevel, starTeff, volatiles, radiusEarth, hydrocarbon }, seed) {
+  const random = rng(Math.floor(seed * 4294967295) ^ 0x5f3759df);
+  const cold = temperatureK < 265;
+  const hot = temperatureK > 315;
+  const heavy = radiusEarth > 1.4;
+  const light = radiusEarth < 0.7;
+  const watery = oceanLevel > 0.85;
+  const dry = oceanLevel > 0 && oceanLevel < 0.3;
+  const foliage = foliageWord(starTeff);
+  const dim = (starTeff ?? 5772) < 4000;
+
+  if (life === 'none') {
+    if (oceanLevel > 0 && !hydrocarbon && temperatureK > 240 && temperatureK < 345) {
+      return pickOf(random, [
+        'None detected: sterile seas, prebiotic chemistry only',
+        'None detected, though the tide pools are rich in amino acids',
+        'None found: the oceans are habitable but empty',
+        'None detected; organic films collect along the shores',
+      ]);
+    }
+    return null;
+  }
+
+  if (life === 'unicellular') {
+    const where = cold
+      ? pickOf(random, ['in brine pockets under the sea ice', 'around hydrothermal vents beneath the ice', 'in meltwater channels near the equator'])
+      : hot
+        ? pickOf(random, ['as heat-loving mats around hot springs', 'in sulphur-rich shallows', 'deep in the crust where the rock stays cool'])
+        : dry
+          ? pickOf(random, ['as crusts on the shores of shrinking lakes', 'in salt flats and evaporite pans', 'in damp soil under desert stones'])
+          : pickOf(random, ['as stromatolite reefs in the shallows', 'as seasonal plankton blooms that tint the seas', 'as slime mats along every coastline', 'drifting through the upper ocean']);
+    const tone = pickOf(random, [
+      'Microbial', 'Single-celled', 'Bacterial', 'Archaeal', 'Microbial, photosynthetic',
+    ]);
+    const extra = random() < 0.4
+      ? pickOf(random, ['; oxygen is only beginning to build', '; methane-makers dominate', `; the blooms are ${dim ? 'dark red' : 'olive'}`, '; viruses outnumber cells ten to one'])
+      : '';
+    return `${tone}, ${where}${extra}`;
+  }
+
+  if (life === 'multicellular') {
+    const land = watery
+      ? pickOf(random, [
+        'Complex marine life: kelp-like forests, reef builders and drifting grazers',
+        'Ocean ecosystems only; floating mats of vegetation the size of islands',
+        'Complex sea life; the few islands are ringed with mangrove-like thickets',
+      ])
+      : dry
+        ? pickOf(random, [
+          `Hardy ${foliage} scrub clustered around oases and river valleys`,
+          `Succulent-like plants with ${foliage} skins; burrowing animals`,
+          'Lichens and drought-sleeping shrubs; life crowds the lake shores',
+        ])
+        : cold
+          ? pickOf(random, [
+            `Tundra of low ${foliage} mosses; grazing herds migrate with the seasons`,
+            `Boreal forests of ${foliage} conifer-analogues near the equator`,
+            'Ice-edge ecosystems: algae under the floes, swimmers that feed on them',
+          ])
+          : hot
+            ? pickOf(random, [
+              `Dense ${foliage} rainforest under constant cloud`,
+              `Heat-tolerant ${foliage} jungles with canopies hundreds of metres tall`,
+              'Swamp forests and steaming wetlands, crowded with insect-analogues',
+            ])
+            : pickOf(random, [
+              `Forests and grasslands of ${foliage} vegetation; animals on land and sea`,
+              `${foliage[0].toUpperCase()}${foliage.slice(1)} forests, plains grazers and their predators`,
+              `Temperate ${foliage} woodland; flying animals and coral-like reefs`,
+              `Savannah of ${foliage} grasses broken by river forests`,
+              `Mixed ${foliage} forest; burrowers, swimmers and gliding animals`,
+            ]);
+    const twist = random() < 0.55
+      ? pickOf(random, [
+        heavy ? '. High gravity keeps plants low and animals squat' : light ? '. Low gravity lets trees grow kilometre-tall' : '. Seasonal migrations cross whole continents',
+        dim ? '. Leaves turn to face the dim red sun' : '. Bioluminescent shores at night',
+        '. No sign of intelligence',
+        '. Colonial organisms build reefs visible from orbit',
+        '. Mound-building colonies dot the plains',
+        '. Many species are hermaphroditic and sessile',
+      ])
+      : '';
+    return `${land}${twist}`;
+  }
+
+  if (life === 'exotic') {
+    if (hydrocarbon || temperatureK < 200) {
+      return pickOf(random, [
+        'Exotic: azotosome cells swimming in liquid methane',
+        'Exotic: slow hydrocarbon-based films on the methane lakes',
+        'Exotic: cryogenic life metabolising acetylene and hydrogen',
+      ]);
+    }
+    if (volatiles === 'airless' || temperatureK > 380) {
+      return pickOf(random, [
+        'Exotic: silicon-based crusts that grow over centuries',
+        'Exotic: sulphur-reducing organisms deep in the hot crust',
+      ]);
+    }
+    return pickOf(random, [
+      'Exotic biochemistry: ammonia-water solvent, chiral opposites of ours',
+      'Exotic: mineral-eating organisms that weather the rock into spires',
+      'Exotic: floating spore clouds in the lower atmosphere',
+      'Exotic: arsenic-tolerant mats in the salt basins',
+      'Exotic: organisms that photosynthesise in the infrared',
+    ]);
+  }
+
+  if (life === 'aerial') {
+    return pickOf(random, [
+      'Floating organisms in the cloud deck',
+      'Gas-bag organisms drifting in the temperate layer, some kilometres wide',
+      'Airborne microbes that ride the convection cells',
+      'Sky-plankton and the jellyfish-like floaters that graze on it',
+      'Hydrogen-filled floaters; hunters dive through them from above',
+    ]);
+  }
+  return null;
+}
+
 export function describePlanet(entry, { starTeff, aAu } = {}) {
   const random = rng(hashName(entry.name ?? 'unnamed'));
 
@@ -568,6 +704,10 @@ export function describePlanet(entry, { starTeff, aAu } = {}) {
   } else if (gaseous && temperatureK > 200 && temperatureK < 420 && lifeRoll < 0.04) {
     life = 'aerial';
   }
+  const lifeNote = describeLife(
+    { life, temperatureK, oceanLevel, starTeff, volatiles, radiusEarth, hydrocarbon: temperatureK < 200 },
+    lifeRoll,
+  );
   const palette = gaseous
     ? giantPalette(temperatureK, random, bulk)
     : rockPalette({ bulk, temperatureK, volatiles, oceanLevel, life, starTeff }, random);
@@ -580,6 +720,7 @@ export function describePlanet(entry, { starTeff, aAu } = {}) {
   const label = [temperature, volatiles, `${prefix}${bulk}`].filter(Boolean).join(' ');
 
   return {
+    lifeNote,
     ...heatOf(temperatureK, gaseous),
     // More, narrower belts on some giants than others, the way Saturn's
     // differ from Jupiter's.
@@ -629,7 +770,21 @@ export function describePlanet(entry, { starTeff, aAu } = {}) {
     provinceScale: 1.5 + random() * 2.9,
     craterScale: 0.5 + random() * 1.3,
     craterDepth: gaseous ? 0 : 0.11 + random() * 0.19,
-    craterOctaves: gaseous ? 0 : 5 + Math.floor(random() * 3),
+    // The same erasure, in how many scales of crater survive at all: airless
+    // worlds keep the whole range, a thin dry air keeps the big ones, and an
+    // ocean world or a Venus has only the odd large basin left.
+    craterOctaves: (() => {
+      const roll = random();
+      if (gaseous) return 0;
+      const bar = air?.pressureBar ?? 0;
+      if (volatiles === 'airless' || bar < 0.01) return 5 + Math.floor(roll * 3);
+      if (bar > 5) return Math.floor(roll * 2);
+      if (oceanLevel > 0) return 1 + Math.floor(roll * 2);
+      return 2 + Math.floor(roll * 3);
+    })(),
+    // Layered rock eroded into cliffs and benches: mesas on a dry world,
+    // stepped canyon walls, nothing on airless ones with no weather to cut it.
+    terrace: gaseous || volatiles === 'airless' ? 0 : (lifeRoll * 7.31) % 1,
     // Whichever way the planet ended up, its axis and rotation are unmeasured.
     tiltDeg: random() * 45,
     rotationHours: gaseous ? 8 + random() * 12 : 12 + random() * 60,
